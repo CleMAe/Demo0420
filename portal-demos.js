@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 详情页交互演示沙箱：纯前端模拟，与门户 Tailwind 风格一致。
  * 按产品 name 精确匹配；否则按 tech_stack 回退。
  */
@@ -45,10 +45,43 @@
   // --- 按产品名称 ---
 
   function demoEnterpriseGpt(root) {
-    root.innerHTML = shell("企业知识检索（RAG）", (
-      '<div class="space-y-4">' +
-      '<label class="block text-xs font-medium text-slate-600">向内部知识库提问</label>' +
-      '<div class="flex flex-col gap-2 sm:flex-row">' +
+    var handbookExcerpt =
+      "3.2.1 申请方式：员工休带薪年假，须提前在 OA 提交「休假申请」，注明起止日期与事由。\n" +
+      "3.2.2 审批流程：申请经直属主管审批后方可休假。\n" +
+      "3.2.3 额度计算：当年年假额度按司龄折算——入职满 1 年不满 10 年，每年 5 天；满 10 年不满 20 年，每年 10 天；满 20 年及以上，每年 15 天。";
+    var oaExcerpt =
+      "流程名称：休假申请 · 适用场景：年假、调休 · 审批节点：直属主管。";
+
+    root.innerHTML = shell("内部知识库问答与文档摘要", (
+      '<p class="text-sm leading-relaxed text-slate-600">' +
+      '面向企业内部的检索增强生成（RAG）场景，将分散在<strong class="text-slate-800">制度、工单与项目文档</strong>中的知识统一索引。' +
+      '支持按部门与角色配置可见范围，回答附带引用片段便于核对；适合人力、法务、运营等多条线降低重复答疑成本。' +
+      "</p>" +
+      '<div class="mt-4 flex flex-wrap gap-2 text-xs">' +
+      '<span class="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600">制度 · 员工手册.md</span>' +
+      '<span class="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600">工单 · HR-0420</span>' +
+      '<span class="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600">项目文档 · 门户集成说明</span>' +
+      "</div>" +
+      '<div class="mt-4 grid gap-4 sm:grid-cols-2">' +
+      '<div><label class="text-xs font-medium text-slate-600">模拟可见范围（角色）</label>' +
+      '<select data-field="role" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      "<option>全员（ADMIN）</option>" +
+      "<option>部门总监（Director）</option>" +
+      "<option>普通员工（USER）</option>" +
+      "</select></div>" +
+      '<div><label class="text-xs font-medium text-slate-600">知识条线</label>' +
+      '<select data-field="line" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      "<option>人力 · 制度与休假</option>" +
+      "<option>法务 · 保密与合规</option>" +
+      "<option>运营 · 流程与报销</option>" +
+      "</select></div></div>" +
+      '<label class="mt-4 block text-xs font-medium text-slate-600">向内部知识库提问</label>' +
+      '<div class="mt-1 flex flex-wrap gap-2">' +
+      '<button type="button" data-preset="新员工如何申请年假？" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 transition hover:border-orange-300 hover:text-orange-700">年假申请</button>' +
+      '<button type="button" data-preset="差旅报销要在多久内提交？" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 transition hover:border-orange-300 hover:text-orange-700">差旅报销</button>' +
+      '<button type="button" data-preset="员工能否把内部文档上传到外部大模型？" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 transition hover:border-orange-300 hover:text-orange-700">保密义务</button>' +
+      "</div>" +
+      '<div class="mt-2 flex flex-col gap-2 sm:flex-row">' +
       '<input type="text" data-field="q" value="新员工如何申请年假？" ' +
       'class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-2.5 text-sm outline-none ring-orange-500/20 transition focus:border-orange-500 focus:bg-white focus:ring-4" />' +
       '<button type="button" data-action="ask" ' +
@@ -58,23 +91,87 @@
       '<div data-slot="out" class="hidden rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm leading-relaxed text-slate-700"></div>' +
       "</div>"
     ));
+
+    root.querySelectorAll("[data-preset]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var inp = root.querySelector("[data-field=\"q\"]");
+        if (inp) inp.value = btn.getAttribute("data-preset") || "";
+      });
+    });
+
+    function renderCitationPanel(label, body) {
+      return (
+        '<details class="mt-2 rounded-lg border border-amber-200 bg-amber-50/80">' +
+        '<summary class="cursor-pointer px-3 py-2 text-xs font-medium text-amber-900">' +
+        escapeHtml(label) +
+        "</summary>" +
+        '<pre class="whitespace-pre-wrap border-t border-amber-200/80 px-3 py-2 font-sans text-xs leading-relaxed text-amber-950">' +
+        escapeHtml(body) +
+        "</pre></details>"
+      );
+    }
+
+    function buildAnswer(q, role, line) {
+      var isLeave = /年假|休假|请假/.test(q);
+      var isExpense = /报销|差旅|费用/.test(q);
+      var isSecret = /保密|上传|大模型|文档/.test(q);
+      var summary;
+      var cites = "";
+
+      if (isLeave) {
+        summary =
+          "根据《员工手册》<strong class=\"font-medium text-orange-600\">第 3.2 节（带薪年假）</strong>：" +
+          "年假须<strong>提前在 OA 提交「休假申请」</strong>，经<strong>直属主管审批</strong>后方可休假；" +
+          "<strong>当年额度按司龄折算</strong>（满 1 年不满 10 年为 5 天/年，以此类推）。未休完年假最多可顺延至次年 3 月 31 日。";
+        cites =
+          renderCitationPanel("引用 · 员工手册.md §3.2", handbookExcerpt) +
+          renderCitationPanel("引用 · OA 流程说明（附录）", oaExcerpt);
+      } else if (isExpense) {
+        summary =
+          "根据《员工手册》<strong class=\"font-medium text-orange-600\">第 4.2 节</strong>：" +
+          "差旅报销须在<strong>出差结束后 10 个工作日内</strong>，在 OA「费用报销」流程提交发票与行程说明，经直属主管及财务审核。";
+        cites =
+          renderCitationPanel("引用 · 员工手册.md §4.2", "4.2 差旅报销须在出差结束后 10 个工作日内，在 OA「费用报销」流程中提交发票与行程说明，经直属主管及财务审核。") +
+          renderCitationPanel("引用 · OA 流程说明（附录）", "流程名称：费用报销 · 适用场景：差旅及业务招待 · 审批节点：直属主管 → 财务");
+      } else if (isSecret) {
+        summary =
+          "根据《员工手册》<strong class=\"font-medium text-orange-600\">第 5.2 节</strong>：" +
+          "禁止将公司内部文档、代码仓库、客户名单上传至个人网盘或<strong>外部大模型公共服务</strong>；" +
+          "经信息安全部审批的私有化部署除外。对外宣传涉及公司业务须经品牌与公关部门书面同意。";
+        cites =
+          renderCitationPanel("引用 · 员工手册.md §5.2", "5.2 禁止将公司内部文档、代码仓库、客户名单上传至个人网盘或外部大模型公共服务（经信息安全部审批的私有化部署除外）。") +
+          renderCitationPanel("引用 · 合规审查 AI（交叉索引 · 模拟）", "与合同及政策条款风险扫描模块联动时，可标注「数据出境 / 第三方 AI 服务」类风险提示（演示占位）。");
+      } else {
+        summary =
+          "已在制度库、工单库与项目文档索引中检索到相关片段（模拟）。建议缩小问题范围，或从上方快捷问题选择人力/法务/运营常见场景。";
+        cites =
+          renderCitationPanel("引用 · 员工手册.md（目录）", "第三章 考勤与休假 · 第四章 薪酬福利 · 第五章 行为规范与保密");
+      }
+
+      return (
+        '<p class="font-medium text-slate-900">摘要回答</p>' +
+        '<p class="mt-2">' + summary + "</p>" +
+        '<p class="mt-3 text-xs text-slate-500">可见范围：' + escapeHtml(role) + " · 知识条线：" + escapeHtml(line) + "</p>" +
+        '<div class="mt-3">' + cites + "</div>" +
+        '<p class="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">' +
+        "可与现有 IM 或门户集成推送回答（演示占位）。问题：" + escapeHtml(q || "（空）") +
+        "</p>"
+      );
+    }
+
     bind(root, "[data-action=\"ask\"]", "click", function () {
       var inp = root.querySelector("[data-field=\"q\"]");
       var out = root.querySelector("[data-slot=\"out\"]");
+      var roleEl = root.querySelector("[data-field=\"role\"]");
+      var lineEl = root.querySelector("[data-field=\"line\"]");
       var q = inp ? inp.value.trim() : "";
+      var role = roleEl ? roleEl.value : "";
+      var line = lineEl ? lineEl.value : "";
       out.classList.remove("hidden");
       out.innerHTML =
-        '<p class="mb-3 flex items-center gap-2 text-xs text-slate-500">' + spinHtml() + " 正在检索制度库…</p>";
+        '<p class="mb-3 flex items-center gap-2 text-xs text-slate-500">' + spinHtml() + " 正在检索制度库、工单与项目文档…</p>";
       setTimeout(function () {
-        out.innerHTML =
-          '<p class="font-medium text-slate-900">摘要回答</p>' +
-          '<p class="mt-2">根据《员工手册》<strong class="font-medium text-orange-600">第 3.2 节</strong>，年假需提前在 OA 提交申请，' +
-          "经直属主管审批；当年额度按司龄折算。以下引用片段可点击展开核对（模拟）。</p>" +
-          '<div class="mt-3 flex flex-wrap gap-2">' +
-          '<button type="button" class="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900 transition hover:bg-amber-100">引用 · 员工手册 3.2</button>' +
-          '<button type="button" class="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900 transition hover:bg-amber-100">引用 · OA 流程说明</button>' +
-          "</div>" +
-          '<p class="mt-3 text-xs text-slate-500">问题：' + escapeHtml(q || "（空）") + "</p>";
+        out.innerHTML = buildAnswer(q, role, line);
       }, 700);
     });
   }

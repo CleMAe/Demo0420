@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import urllib.error
 import urllib.request
+from functools import lru_cache
 
 from dotenv import load_dotenv
 
@@ -34,6 +36,8 @@ PORTAL_BRAND_NAME = os.environ.get("PORTAL_BRAND_NAME", "智能体Demo平台")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 CUSTOMER_SCRIPT_PRODUCT_NAME = "客服话术优化"
+ENTERPRISE_GPT_PRODUCT_NAME = "企业 GPT 助手"
+EMPLOYEE_HANDBOOK_PATH = Path(__file__).resolve().parent / "员工手册.md"
 PROJECT_ROOT = Path(__file__).resolve().parent
 FRONTEND_ASSETS = {
     "": "index.html",
@@ -562,6 +566,50 @@ class CustomerScriptResponse(BaseModel):
     message: str = ""
 
 
+class EnterpriseGptSourceOut(BaseModel):
+    id: str
+    label: str
+    kind: str
+
+
+class EnterpriseGptSourcesData(BaseModel):
+    sources: list[EnterpriseGptSourceOut]
+    preset_questions: list[str]
+    handbook_available: bool
+
+
+class EnterpriseGptSourcesResponse(BaseModel):
+    success: bool
+    data: EnterpriseGptSourcesData | None = None
+    message: str = ""
+
+
+class EnterpriseGptAskRequest(BaseModel):
+    product_id: int
+    question: str = Field(min_length=1, max_length=500)
+    knowledge_line: str | None = Field(default=None, max_length=80)
+
+
+class EnterpriseGptCitation(BaseModel):
+    source_id: str
+    title: str
+    excerpt: str
+
+
+class EnterpriseGptAnswerData(BaseModel):
+    summary: str
+    citations: list[EnterpriseGptCitation]
+    visibility_role: str
+    knowledge_line: str
+    question: str
+
+
+class EnterpriseGptAskResponse(BaseModel):
+    success: bool
+    data: EnterpriseGptAnswerData | None = None
+    message: str = ""
+
+
 class DeepSeekConfigError(RuntimeError):
     """DeepSeek integration is not configured for this deployment."""
 
@@ -745,6 +793,213 @@ def request_deepseek_customer_script(intent: str, customer_message: str) -> Cust
     return _normalize_customer_script_suggestion(_json_object_from_text(content))
 
 
+ENTERPRISE_GPT_SOURCES: list[tuple[str, str, str]] = [
+    ("handbook", "制度 · 员工手册.md", "policy"),
+    ("ticket-hr", "工单 · HR-0420", "ticket"),
+    ("project-portal", "项目文档 · 门户集成说明", "project"),
+]
+
+ENTERPRISE_GPT_PRESET_QUESTIONS: list[str] = [
+    "新员工如何申请年假？",
+    "差旅报销要在多久内提交？",
+    "员工能否把内部文档上传到外部大模型？",
+]
+
+OA_FLOW_CITATIONS: dict[str, tuple[str, str]] = {
+    "leave": (
+        "oa-flow-leave",
+        "引用 · OA 流程说明（附录）",
+        "流程名称：休假申请 · 适用场景：年假、调休 · 审批节点：直属主管。",
+    ),
+    "expense": (
+        "oa-flow-expense",
+        "引用 · OA 流程说明（附录）",
+        "流程名称：费用报销 · 适用场景：差旅及业务招待 · 审批节点：直属主管 → 财务",
+    ),
+}
+
+
+@lru_cache(maxsize=1)
+def _load_employee_handbook() -> str:
+    if not EMPLOYEE_HANDBOOK_PATH.is_file():
+        return ""
+    return EMPLOYEE_HANDBOOK_PATH.read_text(encoding="utf-8")
+
+
+def _extract_markdown_section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    start: int | None = None
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == heading or stripped.startswith(heading + " "):
+            start = index + 1
+            break
+    if start is None:
+        return ""
+    body: list[str] = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if stripped.startswith("### ") or (
+            stripped.startswith("## ") and not stripped.startswith("### ")
+        ):
+            break
+        if stripped == "---":
+            break
+        if stripped:
+            body.append(re.sub(r"\*\*", "", line.rstrip()))
+    return "\n".join(body).strip()
+
+
+def _visibility_role_label(role: str) -> str:
+    return {
+        "ADMIN": "全员（ADMIN）",
+        "Director": "部门总监（Director）",
+        "USER": "普通员工（USER）",
+    }.get(role, role)
+
+
+def _default_knowledge_line(question: str) -> str:
+    if re.search(r"报销|差旅|费用", question):
+        return "运营 · 流程与报销"
+    if re.search(r"保密|上传|大模型|文档", question):
+        return "法务 · 保密与合规"
+    return "人力 · 制度与休假"
+
+
+def _require_enterprise_gpt_product(
+    product_id: int,
+    user: dict[str, Any],
+) -> sqlite3.Row:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != ENTERPRISE_GPT_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="产品不存在或无权访问",
+        )
+    return row
+
+
+def _handbook_citation(section_key: str, title: str, fallback: str) -> EnterpriseGptCitation:
+    handbook = _load_employee_handbook()
+    excerpt = ""
+    if section_key == "3.2":
+        excerpt = _extract_markdown_section(handbook, "### 3.2 带薪年假")
+    elif section_key == "4.2":
+        for line in handbook.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("4.2 "):
+                excerpt = re.sub(r"\*\*", "", stripped)
+                break
+    elif section_key == "5.2":
+        for line in handbook.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("5.2 "):
+                excerpt = re.sub(r"\*\*", "", stripped)
+                break
+    if not excerpt:
+        excerpt = fallback
+    return EnterpriseGptCitation(
+        source_id=f"handbook-{section_key}",
+        title=title,
+        excerpt=excerpt,
+    )
+
+
+def _oa_flow_citation(flow_key: str) -> EnterpriseGptCitation:
+    source_id, title, excerpt = OA_FLOW_CITATIONS[flow_key]
+    return EnterpriseGptCitation(source_id=source_id, title=title, excerpt=excerpt)
+
+
+def build_enterprise_gpt_answer(
+    question: str,
+    knowledge_line: str | None,
+    visibility_role: str,
+) -> EnterpriseGptAnswerData:
+    line = (knowledge_line or "").strip() or _default_knowledge_line(question)
+    citations: list[EnterpriseGptCitation] = []
+
+    if re.search(r"年假|休假|请假", question):
+        summary = (
+            "根据《员工手册》第 3.2 节（带薪年假）：年假须提前在 OA 提交「休假申请」，"
+            "经直属主管审批后方可休假；当年额度按司龄折算（满 1 年不满 10 年为 5 天/年，以此类推）。"
+            "未休完年假最多可顺延至次年 3 月 31 日。"
+        )
+        citations = [
+            _handbook_citation(
+                "3.2",
+                "引用 · 员工手册.md §3.2",
+                "3.2.1 申请方式：员工休带薪年假，须提前在 OA 提交「休假申请」。"
+                "3.2.2 审批流程：申请经直属主管审批后方可休假。"
+                "3.2.3 额度计算：当年年假额度按司龄折算。",
+            ),
+            _oa_flow_citation("leave"),
+        ]
+    elif re.search(r"报销|差旅|费用", question):
+        summary = (
+            "根据《员工手册》第 4.2 节：差旅报销须在出差结束后 10 个工作日内，"
+            "在 OA「费用报销」流程提交发票与行程说明，经直属主管及财务审核。"
+        )
+        citations = [
+            _handbook_citation(
+                "4.2",
+                "引用 · 员工手册.md §4.2",
+                "4.2 差旅报销须在出差结束后 10 个工作日内，在 OA「费用报销」流程中提交发票与行程说明，"
+                "经直属主管及财务审核。",
+            ),
+            _oa_flow_citation("expense"),
+        ]
+    elif re.search(r"保密|上传|大模型|文档", question):
+        summary = (
+            "根据《员工手册》第 5.2 节：禁止将公司内部文档、代码仓库、客户名单上传至个人网盘或"
+            "外部大模型公共服务；经信息安全部审批的私有化部署除外。"
+            "对外宣传涉及公司业务须经品牌与公关部门书面同意。"
+        )
+        citations = [
+            _handbook_citation(
+                "5.2",
+                "引用 · 员工手册.md §5.2",
+                "5.2 禁止将公司内部文档、代码仓库、客户名单上传至个人网盘或外部大模型公共服务"
+                "（经信息安全部审批的私有化部署除外）。",
+            ),
+            EnterpriseGptCitation(
+                source_id="cross-compliance",
+                title="引用 · 合规审查 AI（交叉索引 · 模拟）",
+                excerpt=(
+                    "与合同及政策条款风险扫描模块联动时，可标注「数据出境 / 第三方 AI 服务」类风险提示（演示占位）。"
+                ),
+            ),
+        ]
+    else:
+        summary = (
+            "已在制度库、工单库与项目文档索引中检索到相关片段（模拟）。"
+            "建议缩小问题范围，或从预设问题中选择人力/法务/运营常见场景。"
+        )
+        citations = [
+            EnterpriseGptCitation(
+                source_id="handbook-toc",
+                title="引用 · 员工手册.md（目录）",
+                excerpt="第三章 考勤与休假 · 第四章 薪酬福利 · 第五章 行为规范与保密",
+            )
+        ]
+
+    return EnterpriseGptAnswerData(
+        summary=summary,
+        citations=citations,
+        visibility_role=visibility_role,
+        knowledge_line=line,
+        question=question,
+    )
+
+
 # -----------------------------------------------------------------------------
 # App
 # -----------------------------------------------------------------------------
@@ -888,6 +1143,44 @@ def suggest_customer_script(
     if not isinstance(suggestion, CustomerScriptSuggestion):
         suggestion = _normalize_customer_script_suggestion(suggestion)
     return CustomerScriptResponse(success=True, data=suggestion)
+
+
+@app.get("/api/enterprise-gpt/sources", response_model=EnterpriseGptSourcesResponse)
+def enterprise_gpt_sources(
+    product_id: int,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> EnterpriseGptSourcesResponse:
+    _require_enterprise_gpt_product(product_id, user)
+    return EnterpriseGptSourcesResponse(
+        success=True,
+        data=EnterpriseGptSourcesData(
+            sources=[
+                EnterpriseGptSourceOut(id=source_id, label=label, kind=kind)
+                for source_id, label, kind in ENTERPRISE_GPT_SOURCES
+            ],
+            preset_questions=list(ENTERPRISE_GPT_PRESET_QUESTIONS),
+            handbook_available=EMPLOYEE_HANDBOOK_PATH.is_file(),
+        ),
+    )
+
+
+@app.post("/api/enterprise-gpt/ask", response_model=EnterpriseGptAskResponse)
+def enterprise_gpt_ask(
+    body: EnterpriseGptAskRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> EnterpriseGptAskResponse:
+    _require_enterprise_gpt_product(body.product_id, user)
+    if not EMPLOYEE_HANDBOOK_PATH.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="员工手册知识库文件不可用",
+        )
+    answer = build_enterprise_gpt_answer(
+        body.question.strip(),
+        body.knowledge_line,
+        _visibility_role_label(user["role"]),
+    )
+    return EnterpriseGptAskResponse(success=True, data=answer)
 
 
 @app.get("/health")
