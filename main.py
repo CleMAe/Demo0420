@@ -14,7 +14,7 @@ load_dotenv()
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,6 +34,13 @@ PORTAL_BRAND_NAME = os.environ.get("PORTAL_BRAND_NAME", "智能体Demo平台")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 CUSTOMER_SCRIPT_PRODUCT_NAME = "客服话术优化"
+SMART_OFFICE_PRODUCT_NAME = "智能办公智能体"
+SMART_OFFICE_SCENARIOS: dict[str, str] = {
+    "expense": "报销单据",
+    "resume": "简历筛选",
+    "tender": "招标文件",
+    "contract": "合同审核",
+}
 PROJECT_ROOT = Path(__file__).resolve().parent
 FRONTEND_ASSETS = {
     "": "index.html",
@@ -537,6 +544,29 @@ class CustomerScriptResponse(BaseModel):
     message: str = ""
 
 
+class SmartOfficeReviewRequest(BaseModel):
+    product_id: int
+    scenario: Literal["expense", "resume", "tender", "contract"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class SmartOfficeReviewResult(BaseModel):
+    scenario: str
+    scenario_label: str
+    risk_level: str
+    score: int = Field(ge=0, le=100)
+    summary: str
+    findings: list[str]
+    suggestions: list[str]
+    next_step: str
+
+
+class SmartOfficeReviewResponse(BaseModel):
+    success: bool
+    data: SmartOfficeReviewResult | None = None
+    message: str = ""
+
+
 class DeepSeekConfigError(RuntimeError):
     """DeepSeek integration is not configured for this deployment."""
 
@@ -720,6 +750,117 @@ def request_deepseek_customer_script(intent: str, customer_message: str) -> Cust
     return _normalize_customer_script_suggestion(_json_object_from_text(content))
 
 
+def _content_has_any(content: str, keywords: list[str]) -> bool:
+    text = content.casefold()
+    return any(keyword.casefold() in text for keyword in keywords)
+
+
+def _risk_level_from_score(score: int) -> str:
+    if score >= 70:
+        return "高"
+    if score >= 45:
+        return "中"
+    return "低"
+
+
+def review_smart_office_document(scenario: str, content: str) -> SmartOfficeReviewResult:
+    scenario_label = SMART_OFFICE_SCENARIOS[scenario]
+    findings: list[str] = []
+    suggestions: list[str] = []
+    score = 28
+
+    if scenario == "expense":
+        if _content_has_any(content, ["超标", "超过标准", "超额", "超标准"]):
+            findings.append("差旅或招待费用存在超标迹象，需核对标准额度与审批权限")
+            score += 28
+        if _content_has_any(content, ["未填写", "缺少", "无说明", "招待对象", "事由"]):
+            findings.append("费用说明、招待对象或出差事由信息不完整")
+            score += 22
+        if _content_has_any(content, ["无发票", "缺发票", "未附发票", "发票缺失"]):
+            findings.append("报销凭证不完整，缺少有效发票或附件")
+            score += 24
+        elif _content_has_any(content, ["发票齐全", "发票齐全", "发票"]):
+            suggestions.append("发票材料较完整，可优先进入费用合规初审")
+        suggestions.extend(["核对费用标准、审批链与预算科目", "补充参与人员、招待对象与业务事由"])
+        next_step = (
+            "退回申请人补充材料后重新提交"
+            if findings
+            else "可提交财务初审并归档审批记录"
+        )
+        summary = (
+            "报销单据存在费用合规风险，建议补充说明并复核标准。"
+            if findings
+            else "报销单据整体合规性较好，可进入常规审批流程。"
+        )
+    elif scenario == "resume":
+        if _content_has_any(content, ["不匹配", "匹配度", "偏弱", "不足"]):
+            findings.append("候选人与岗位要求的匹配度存在明显差距")
+            score += 26
+        if _content_has_any(content, ["缺少", "无行业", "行业背景", "经验不足"]):
+            findings.append("目标行业或关键岗位经验不足，需重点面试验证")
+            score += 22
+        if _content_has_any(content, ["后端", "python", "java", "架构"]):
+            suggestions.append("核心技术栈经验较充分，可安排技术面试深挖项目细节")
+            score = max(score - 8, 20)
+        suggestions.extend(["对照 JD 核对年限、行业与核心技能", "对风险项安排结构化面试与背调"])
+        next_step = "建议进入业务面试并记录匹配度评分" if findings else "可进入 HR 初筛通过名单"
+        summary = (
+            "简历与岗位存在需重点核实的不匹配项。"
+            if findings
+            else "简历整体与岗位较匹配，可推进下一轮筛选。"
+        )
+    elif scenario == "tender":
+        if _content_has_any(content, ["相似", "雷同", "串标", "围标"]):
+            findings.append("招标文件与历史方案存在相似或围标风险信号")
+            score += 30
+        if _content_has_any(content, ["资质", "门槛", "排他"]):
+            findings.append("资质或评分条款可能限制竞争，需审查公平性")
+            score += 20
+        if _content_has_any(content, ["未发现", "相似度低", "18%"]):
+            suggestions.append("文本相似度较低，可继续常规采购流程")
+            score = max(score - 10, 20)
+        suggestions.extend(["比对历史中标文本与关键条款差异", "邀请采购与法务联合复核评分办法"])
+        next_step = "建议采购委员会复核后进入下一环节"
+        summary = (
+            "招标文件存在需关注的合规与公平性风险。"
+            if findings
+            else "招标文件未发现显著串标或排他风险。"
+        )
+    else:
+        if _content_has_any(content, ["责任上限", "赔偿", "违约责任", "付款周期"]):
+            findings.append("合同关键条款与标准模板存在偏离，需法务重点审查")
+            score += 26
+        if _content_has_any(content, ["不一致", "偏离", "补充协议"]):
+            findings.append("条款表述与集团模板不一致，可能引发履约争议")
+            score += 20
+        if _content_has_any(content, ["数据出境", "保密", "知识产权"]):
+            findings.append("数据合规或知识产权条款需专项评估")
+            score += 18
+        suggestions.extend(["对照标准合同模板逐条比对差异", "对高风险条款补充修订建议与谈判底线"])
+        next_step = "提交法务复核并记录谈判修改意见"
+        summary = (
+            "合同文本存在需法务介入的中高风险条款。"
+            if findings
+            else "合同条款整体可控，可进入标准法务流程。"
+        )
+
+    if not findings:
+        findings.append(f"{scenario_label}未发现显著规则命中项，建议按常规流程处理")
+        score = min(score, 40)
+    score = max(0, min(100, score))
+
+    return SmartOfficeReviewResult(
+        scenario=scenario,
+        scenario_label=scenario_label,
+        risk_level=_risk_level_from_score(score),
+        score=score,
+        summary=summary,
+        findings=findings,
+        suggestions=suggestions or [f"按{scenario_label}标准清单完成复核"],
+        next_step=next_step,
+    )
+
+
 # -----------------------------------------------------------------------------
 # App
 # -----------------------------------------------------------------------------
@@ -863,6 +1004,28 @@ def suggest_customer_script(
     if not isinstance(suggestion, CustomerScriptSuggestion):
         suggestion = _normalize_customer_script_suggestion(suggestion)
     return CustomerScriptResponse(success=True, data=suggestion)
+
+
+@app.post("/api/smart-office/review", response_model=SmartOfficeReviewResponse)
+def review_smart_office(
+    body: SmartOfficeReviewRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> SmartOfficeReviewResponse:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (body.product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != SMART_OFFICE_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+
+    result = review_smart_office_document(body.scenario, body.content.strip())
+    return SmartOfficeReviewResponse(success=True, data=result)
 
 
 @app.get("/health")

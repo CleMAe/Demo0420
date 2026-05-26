@@ -751,33 +751,151 @@
     });
   }
 
-  function demoSmartOffice(root) {
+  function demoSmartOffice(root, product) {
+    var scenarios = [
+      {
+        key: "expense",
+        label: "报销单据",
+        sample:
+          "差旅餐费 3200 元，超过标准 12%，未填写招待对象说明，发票齐全。"
+      },
+      {
+        key: "resume",
+        label: "简历筛选",
+        sample:
+          "候选人 5 年后端经验，但缺少目标行业背景，岗位匹配度一般。"
+      },
+      {
+        key: "tender",
+        label: "招标文件",
+        sample:
+          "与历史中标方案相似度 18%，未发现明显串标片段，评分项含排他资质要求。"
+      },
+      {
+        key: "contract",
+        label: "合同审核",
+        sample:
+          "责任上限条款与模板不一致，付款周期 90 天，建议法务复核。"
+      }
+    ];
+    var active = scenarios[0];
+
     root.innerHTML = shell("多流程文档审查", (
-      '<div class="flex flex-wrap gap-2 border-b border-slate-100 pb-3">' +
-      ["报销单据", "简历筛选", "招标文件", "合同审核"].map(function (t, i) {
+      '<div class="flex flex-wrap items-center gap-2 border-b border-slate-100 pb-3">' +
+      scenarios.map(function (item, i) {
         return (
-          '<button type="button" data-tab="' + i + '" class="rounded-full px-3 py-1 text-xs font-medium ' +
+          '<button type="button" data-scenario="' + item.key + '" class="rounded-full px-3 py-1 text-xs font-medium ' +
           (i === 0 ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200") + '">' +
-          escapeHtml(t) + "</button>"
+          escapeHtml(item.label) + "</button>"
         );
       }).join("") +
+      '<span class="ml-auto rounded-lg bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700">规则引擎 API</span>' +
       "</div>" +
-      '<div data-panel="0" class="mt-3 text-sm text-slate-700">差旅餐费超标 12%，缺少招待对象说明（模拟规则命中）。</div>' +
-      '<div data-panel="1" class="mt-3 hidden text-sm text-slate-700">简历与 JD 匹配度 76%：后端经验充分，行业经验偏弱（模拟）。</div>' +
-      '<div data-panel="2" class="mt-3 hidden text-sm text-slate-700">与历史中标方案相似度 18%，未发现明显串标片段（模拟）。</div>' +
-      '<div data-panel="3" class="mt-3 hidden text-sm text-slate-700">责任上限条款与模板不一致，建议法务复核（模拟）。</div>'
+      '<label class="mt-4 block text-xs font-medium text-slate-600">待审查内容</label>' +
+      '<textarea data-field="content" rows="6" class="mt-1 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed outline-none ring-orange-500/20 transition focus:border-orange-500 focus:ring-4">' +
+      escapeHtml(active.sample) +
+      "</textarea>" +
+      '<button type="button" data-action="review" class="mt-3 inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">开始审查</button>' +
+      '<div data-slot="result" class="mt-4 hidden rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700"></div>'
     ));
-    root.querySelectorAll("[data-tab]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var i = btn.getAttribute("data-tab");
-        root.querySelectorAll("[data-tab]").forEach(function (b) {
-          b.className = "rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200";
-        });
-        btn.className = "rounded-full bg-orange-500 px-3 py-1 text-xs font-medium text-white";
-        root.querySelectorAll("[data-panel]").forEach(function (p) {
-          p.classList.toggle("hidden", p.getAttribute("data-panel") !== i);
-        });
+
+    function apiBase() {
+      if (!window.location.host) return "http://127.0.0.1";
+      return "";
+    }
+    function renderList(items, emptyText) {
+      var list = Array.isArray(items) ? items : [];
+      if (!list.length) return "<li>" + escapeHtml(emptyText) + "</li>";
+      return list.map(function (item) {
+        return "<li>" + escapeHtml(item) + "</li>";
+      }).join("");
+    }
+    function riskBadgeClass(level) {
+      if (level === "高") return "bg-red-50 text-red-700";
+      if (level === "中") return "bg-amber-50 text-amber-800";
+      return "bg-emerald-50 text-emerald-700";
+    }
+    function setActiveScenario(key) {
+      scenarios.forEach(function (item) {
+        if (item.key === key) active = item;
       });
+      root.querySelectorAll("[data-scenario]").forEach(function (btn) {
+        var on = btn.getAttribute("data-scenario") === key;
+        btn.className =
+          "rounded-full px-3 py-1 text-xs font-medium " +
+          (on ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200");
+      });
+      var field = root.querySelector("[data-field=\"content\"]");
+      if (field) field.value = active.sample;
+    }
+    root.querySelectorAll("[data-scenario]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        setActiveScenario(btn.getAttribute("data-scenario"));
+      });
+    });
+    bind(root, "[data-action=\"review\"]", "click", function () {
+      var content = root.querySelector("[data-field=\"content\"]").value.trim();
+      var out = root.querySelector("[data-slot=\"result\"]");
+      var btn = root.querySelector("[data-action=\"review\"]");
+      var token = localStorage.getItem("portal_token");
+      out.classList.remove("hidden");
+      if (!content) {
+        out.className = "mt-4 rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm text-red-700";
+        out.textContent = "请先输入待审查内容。";
+        return;
+      }
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 审查中";
+      out.className = "mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700";
+      out.innerHTML =
+        '<p class="flex items-center gap-2 text-sm text-slate-600">' + spinHtml() + " 正在调用规则引擎审查…</p>";
+      fetch(apiBase() + "/api/smart-office/review", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product_id: product && product.id,
+          scenario: active.key,
+          content: content
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error((data && data.detail) || "审查失败");
+            return data;
+          });
+        })
+        .then(function (body) {
+          var data = body.data || {};
+          var risk = data.risk_level || "中";
+          out.className = "mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-800";
+          out.innerHTML =
+            '<div class="flex flex-wrap items-center gap-2">' +
+            '<span class="rounded-lg bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">' +
+            escapeHtml(data.scenario_label || active.label) +
+            "</span>" +
+            '<span class="rounded-lg px-2 py-1 text-xs font-medium ' + riskBadgeClass(risk) + '">风险 ' +
+            escapeHtml(risk) +
+            "</span>" +
+            '<span class="text-xs text-slate-500">评分 ' + escapeHtml(String(data.score == null ? "--" : data.score)) + "/100</span></div>" +
+            '<p class="mt-3 font-medium text-slate-900">' + escapeHtml(data.summary || "审查完成") + "</p>" +
+            '<p class="mt-4 text-xs font-semibold text-slate-600">风险点</p>' +
+            '<ul class="mt-1 list-disc space-y-1 pl-5">' + renderList(data.findings, "暂无显著风险点") + "</ul>" +
+            '<p class="mt-4 text-xs font-semibold text-slate-600">处理建议</p>' +
+            '<ul class="mt-1 list-disc space-y-1 pl-5">' + renderList(data.suggestions, "按标准流程复核") + "</ul>" +
+            '<p class="mt-4 text-xs font-semibold text-slate-600">下一步</p>' +
+            '<p class="mt-1 leading-relaxed">' + escapeHtml(data.next_step || "按流程提交复核") + "</p>";
+        })
+        .catch(function (ex) {
+          out.className = "mt-4 rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm leading-relaxed text-red-700";
+          out.textContent = ex.message || "审查失败，请稍后重试。";
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "开始审查";
+        });
     });
   }
 
