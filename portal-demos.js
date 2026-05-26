@@ -122,48 +122,147 @@
   }
 
   function demoFinReport(root) {
-    root.innerHTML = shell("研报草稿生成", (
-      '<div class="grid gap-4 sm:grid-cols-2">' +
+    root.innerHTML = shell("金融研报生成器（模拟 Demo）", (
+      '<div class="grid gap-4 sm:grid-cols-3">' +
       '<div><label class="text-xs font-medium text-slate-600">主题</label>' +
       '<select data-field="topic" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
       "<option>消费电子 · 季度景气</option>" +
       "<option>银行板块 · 息差展望</option>" +
+      "<option>新能源 · 出海趋势</option>" +
+      "<option>医药生物 · 创新管线</option>" +
+      "</select></div>" +
+      '<div><label class="text-xs font-medium text-slate-600">行业</label>' +
+      '<select data-field="industry" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      "<option>消费电子</option>" +
+      "<option>银行</option>" +
+      "<option>新能源</option>" +
+      "<option>医药生物</option>" +
       "</select></div>" +
       '<div><label class="text-xs font-medium text-slate-600">篇幅</label>' +
       '<select data-field="len" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
       "<option>简版（3 段）</option>" +
       "<option>标准（6 段）</option>" +
+      "<option>详细（10 段）</option>" +
       "</select></div></div>" +
       '<button type="button" data-action="gen" class="mt-4 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">生成模拟草稿</button>' +
-      '<div data-slot="doc" class="mt-4 hidden rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"></div>'
+      '<div data-slot="doc" class="mt-4 hidden space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"></div>'
     ));
     bind(root, "[data-action=\"gen\"]", "click", function () {
       var doc = root.querySelector("[data-slot=\"doc\"]");
       var topic = root.querySelector("[data-field=\"topic\"]").value;
+      var ind = root.querySelector("[data-field=\"industry\"]").value;
+      var isLong = root.querySelector("[data-field=\"len\"]").value.indexOf("详细") >= 0;
       doc.classList.remove("hidden");
-      doc.innerHTML = "<p class=\"text-xs text-slate-500\">生成中…</p>";
+      doc.innerHTML = '<div class="flex items-center gap-2 text-xs text-slate-500"><div class="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-orange-500"></div>生成中…</div>';
       setTimeout(function () {
+        var extra = isLong ? (
+          '<p class="mt-3 rounded border-l-4 border-slate-300 bg-white py-2 pl-3 pr-2">' +
+          '<span class="font-medium text-slate-900">[模拟段落 1 · 行业综述]</span><br>' +
+          escapeHtml(ind) + "行业在报告期内保持稳健增长，头部企业集中度进一步提升。渠道库存水平回归健康区间，" +
+          "成本端原材料价格回落为毛利改善提供了空间。展望下半年，需求端有望受政策与新品周期双重驱动。" +
+          '</p>' +
+          '<p class="mt-2 rounded border-l-4 border-slate-300 bg-white py-2 pl-3 pr-2">' +
+          '<span class="font-medium text-slate-900">[模拟段落 2 · 竞争格局]</span><br>' +
+          "市场集中度 CR3 约 42%（模拟），较去年同期提升 3 个百分点。头部企业在研发投入与渠道下沉方面持续加大力度，" +
+          "中小厂商面临份额挤压。差异化竞争主要集中在产品定义、定价策略与售后服务三个维度。" +
+          '</p>' +
+          '<p class="mt-2 rounded border-l-4 border-slate-300 bg-white py-2 pl-3 pr-2">' +
+          '<span class="font-medium text-slate-900">[模拟段落 3 · 风险与展望]</span><br>' +
+          "需关注地缘政治对供应链的潜在扰动，以及终端需求复苏节奏不及预期的下行风险。海外关税政策调整可能影响出口业务毛利率。" +
+          "建议维持标配评级，关注季度出货量拐点信号。" +
+          '</p>'
+        ) : (
+          '<p class="mt-2">行业整体景气度温和回升，头部企业受益于成本改善与结构升级，盈利能力环比改善。' +
+          "竞争格局方面集中度持续提升，尾部产能出清加速。" +
+          "中期需关注海外需求韧性与汇率波动对出口业务的影响。</p>"
+        );
         doc.innerHTML =
-          '<p class="text-base font-semibold text-slate-900">' + escapeHtml(topic) + " · 模拟摘要</p>" +
-          '<p class="mt-2">核心观点：需求端温和复苏，渠道库存回到健康区间；成本端存储价格回落改善毛利。</p>' +
-          '<p class="mt-2">数据占位：<span class="rounded bg-white px-2 py-0.5 font-mono text-xs text-slate-500">[图表: 营收同比]</span> ' +
-          '<span class="rounded bg-white px-2 py-0.5 font-mono text-xs text-slate-500">[表: 分业务毛利]</span></p>' +
-          '<p class="mt-2 text-xs text-slate-500">数据来源标注：Wind 样本区间 2019–2026（模拟）</p>';
-      }, 600);
+          '<div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">' +
+          '⚠ 模拟演示数据，不构成投资建议。所有数字与观点为 AI 模拟生成，仅供参考。' +
+          '</div>' +
+          '<p class="text-base font-semibold text-slate-900">' + escapeHtml(topic) + " · 模拟研报摘要</p>" +
+          '<div><span class="font-medium text-slate-900">核心观点</span>' +
+          '<p class="mt-1">需求端温和复苏，渠道库存回到健康区间；成本端原材料价格回落改善毛利空间。' +
+          "行业集中度持续提升，头部企业有望进一步扩大份额。</p></div>" +
+          '<div><span class="font-medium text-slate-900">关键数据占位</span>' +
+          '<div class="mt-1 flex flex-wrap gap-2">' +
+          '<span class="rounded bg-white px-2 py-0.5 font-mono text-xs text-slate-500">[图表: 营收同比增速]</span>' +
+          '<span class="rounded bg-white px-2 py-0.5 font-mono text-xs text-slate-500">[表: 分业务毛利率对比]</span>' +
+          '<span class="rounded bg-white px-2 py-0.5 font-mono text-xs text-slate-500">[图: 市场份额变化]</span>' +
+          '<span class="rounded bg-white px-2 py-0.5 font-mono text-xs text-slate-500">[表: 期间费用率]</span>' +
+          "</div></div>" +
+          '<div><span class="font-medium text-red-700">风险提示</span>' +
+          '<p class="mt-1">地缘政治扰动可能影响供应链稳定性；终端需求复苏节奏存在不确定性；' +
+          "原材料价格若反弹将侵蚀毛利改善空间。</p></div>" +
+          '<div><span class="font-medium text-orange-700">合规提示</span>' +
+          '<p class="mt-1">本报告为 AI 模拟生成草稿，不构成投资建议。数据来源标注：Wind 样本区间 2019–2026（模拟）。' +
+          "未经人工复核与合规审核，不得作为投资决策依据。</p></div>" +
+          '<div class="border-t border-slate-200 pt-3">' +
+          '<span class="font-medium text-slate-900">模拟研报段落</span>' +
+          extra +
+          "</div>";
+      }, 800);
     });
   }
 
   function demoCreditRisk(root) {
-    root.innerHTML = shell("特征与漂移监控（模拟）", (
+    root.innerHTML = shell("信贷风控模型工作台（模拟 Demo）", (
+      '<div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 mb-4">' +
+      '⚠ 演示用途，不用于真实信贷审批。所有评分与建议为模拟数据。' +
+      '</div>' +
       '<div class="grid gap-4 lg:grid-cols-2">' +
-      '<div><p class="text-xs font-medium text-slate-600">特征重要性（Top 5）</p>' +
-      '<div data-bars class="mt-2 space-y-2"></div></div>' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<p class="text-xs font-medium text-slate-600 mb-2">模拟客户画像</p>' +
+      '<div class="grid grid-cols-2 gap-3">' +
+      '<div><label class="text-[11px] text-slate-500">年龄</label>' +
+      '<select data-field="age" class="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">' +
+      "<option>25-35</option><option>36-45</option><option>46-55</option><option>55+</option>" +
+      "</select></div>" +
+      '<div><label class="text-[11px] text-slate-500">收入水平</label>' +
+      '<select data-field="income" class="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">' +
+      "<option>低（< 5K）</option><option>中（5K-15K）</option><option>高（> 15K）</option>" +
+      "</select></div>" +
+      '<div><label class="text-[11px] text-slate-500">职业类型</label>' +
+      '<select data-field="job" class="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">' +
+      "<option>稳定（公务员/国企）</option><option>一般（私企职员）</option><option>灵活（自由职业）</option>" +
+      "</select></div>" +
+      '<div><label class="text-[11px] text-slate-500">贷款用途</label>' +
+      '<select data-field="purpose" class="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">' +
+      "<option>消费贷</option><option>房贷</option><option>经营贷</option>" +
+      "</select></div>" +
+      "</div>" +
+      '<button type="button" data-action="score" class="mt-3 w-full rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">模拟评分</button>' +
+      "</div>" +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<p class="text-xs font-medium text-slate-600 mb-2">风险评估结果</p>' +
+      '<div data-slot="result" class="text-xs text-slate-400">点击「模拟评分」查看结果</div>' +
+      "</div>" +
+      "</div>" +
+      '<div class="mt-4 grid gap-4 lg:grid-cols-2">' +
       '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4">' +
-      '<p class="text-xs font-medium text-slate-600">线上监控</p>' +
-      '<p data-slot="drift" class="mt-2 text-sm text-slate-700">分箱漂移：<span class="font-medium text-emerald-600">正常</span></p>' +
-      '<button type="button" data-action="simulate" class="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">' +
-      "模拟异常注入" +
-      "</button></div></div>"
+      '<p class="text-xs font-medium text-slate-600">特征重要性（Top 5）</p>' +
+      '<div data-bars class="mt-2 space-y-2"></div>' +
+      '<p class="mt-2 text-[10px] text-slate-400">基于模拟样本的 SHAP 值计算，仅供参考</p>' +
+      "</div>" +
+      '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4">' +
+      '<p class="text-xs font-medium text-slate-600">模型漂移监控</p>' +
+      '<div class="mt-3 space-y-2">' +
+      '<div class="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs">' +
+      '<span class="text-slate-600">PSI（群体稳定性）</span>' +
+      '<span data-slot="psi" class="font-medium text-emerald-600">0.02（正常）</span></div>' +
+      '<div class="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs">' +
+      '<span class="text-slate-600">分箱漂移</span>' +
+      '<span data-slot="drift" class="font-medium text-emerald-600">正常</span></div>' +
+      '<div class="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs">' +
+      '<span class="text-slate-600">拒绝率</span>' +
+      '<span data-slot="reject" class="font-medium text-emerald-600">12.3%（基线）</span></div>' +
+      "</div>" +
+      '<button type="button" data-action="simulate" class="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100">' +
+      "模拟异常注入 / 漂移预警" +
+      "</button>" +
+      '<p data-slot="alert" class="mt-2 hidden rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700"></p>' +
+      "</div>" +
+      "</div>"
     ));
     var feats = [
       { n: "近 6 月逾期次数", v: 92 },
@@ -175,16 +274,76 @@
     var bars = root.querySelector("[data-bars]");
     bars.innerHTML = feats.map(function (f) {
       return (
-        '<button type="button" class="flex w-full items-center gap-2 text-left text-xs" data-tip="' + escapeHtml(f.n) + ' 贡献 ' + f.v + "%（模拟）\">" +
-        '<span class="w-28 shrink-0 truncate text-slate-600">' + escapeHtml(f.n) + "</span>" +
+        '<div class="flex w-full items-center gap-2 text-xs">' +
+        '<span class="w-28 shrink-0 truncate text-slate-600" title="' + escapeHtml(f.n) + '">' + escapeHtml(f.n) + "</span>" +
         '<span class="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">' +
         '<span class="block h-full rounded-full bg-orange-500" style="width:' + f.v + '%"></span></span>' +
-        "<span class=\"w-8 text-right text-slate-500\">" + f.v + "%</span></button>"
+        "<span class=\"w-8 text-right text-slate-500\">" + f.v + "%</span></div>"
       );
     }).join("");
+    var driftStates = [
+      { psi: "0.02（正常）", drift: "正常", reject: "12.3%（基线）", psiCls: "text-emerald-600", driftCls: "text-emerald-600", rejectCls: "text-emerald-600", alert: null },
+      { psi: "0.08（关注）", drift: "近端偏移 +0.12", reject: "15.7%（上升）", psiCls: "text-amber-600", driftCls: "text-amber-600", rejectCls: "text-amber-600", alert: "⚠ 漂移预警：PSI 超过 0.05 阈值，建议检查近期客群结构与特征分布变化。" },
+      { psi: "0.18（告警）", drift: "显著偏移 +0.31", reject: "21.4%（偏高）", psiCls: "text-red-600", driftCls: "text-red-600", rejectCls: "text-red-600", alert: "🚨 严重告警：PSI 超过 0.15 红线，模型需立即重训练。拒绝率异常攀升，建议暂停自动审批。" }
+    ];
+    var driftIdx = 0;
     bind(root, "[data-action=\"simulate\"]", "click", function () {
-      root.querySelector("[data-slot=\"drift\"]").innerHTML =
-        '分箱漂移：<span class="font-medium text-amber-600">关注 · 近端分箱偏移 +0.12</span>（模拟）';
+      driftIdx = (driftIdx + 1) % driftStates.length;
+      var s = driftStates[driftIdx];
+      root.querySelector("[data-slot=\"psi\"]").className = "font-medium " + s.psiCls;
+      root.querySelector("[data-slot=\"psi\"]").textContent = s.psi;
+      root.querySelector("[data-slot=\"drift\"]").className = "font-medium " + s.driftCls;
+      root.querySelector("[data-slot=\"drift\"]").textContent = s.drift;
+      root.querySelector("[data-slot=\"reject\"]").className = "font-medium " + s.rejectCls;
+      root.querySelector("[data-slot=\"reject\"]").textContent = s.reject;
+      var alertEl = root.querySelector("[data-slot=\"alert\"]");
+      if (s.alert) {
+        alertEl.classList.remove("hidden");
+        alertEl.textContent = s.alert;
+      } else {
+        alertEl.classList.add("hidden");
+      }
+    });
+    bind(root, "[data-action=\"score\"]", "click", function () {
+      var age = root.querySelector("[data-field=\"age\"]").value;
+      var income = root.querySelector("[data-field=\"income\"]").value;
+      var job = root.querySelector("[data-field=\"job\"]").value;
+      var purpose = root.querySelector("[data-field=\"purpose\"]").value;
+      var score, level, levelCls, suggestion, topFeat;
+      if (income.indexOf("高") >= 0 && job.indexOf("稳定") >= 0) {
+        score = 752;
+        level = "低风险";
+        levelCls = "text-emerald-700 bg-emerald-50";
+        suggestion = "建议通过，授信额度可适当放宽。";
+        topFeat = "收入负债比（贡献 22%）、职业稳定性（贡献 18%）为正向主要驱动因素。";
+      } else if (income.indexOf("低") >= 0 && job.indexOf("灵活") >= 0) {
+        score = 428;
+        level = "高风险";
+        levelCls = "text-red-700 bg-red-50";
+        suggestion = "建议拒绝，或要求提供担保/抵押。";
+        topFeat = "近 6 月逾期次数（贡献 41%）、收入负债比（贡献 29%）为主要负向因素。";
+      } else {
+        score = 618;
+        level = "中风险";
+        levelCls = "text-amber-700 bg-amber-50";
+        suggestion = "建议补充收入流水与征信报告后人工复核。";
+        topFeat = "征信查询次数（贡献 18%）与额度使用率（贡献 15%）处于临界区间。";
+      }
+      var resultEl = root.querySelector("[data-slot=\"result\"]");
+      resultEl.innerHTML =
+        '<div class="flex items-center justify-between">' +
+        '<div><span class="text-2xl font-bold text-slate-900">' + score + '</span>' +
+        '<span class="ml-1 text-xs text-slate-400">/ 1000</span></div>' +
+        '<span class="rounded-full px-3 py-1 text-xs font-medium ' + levelCls + '">' + level + "</span>" +
+        "</div>" +
+        '<div class="mt-3 space-y-2 border-t border-slate-100 pt-3">' +
+        '<div class="flex justify-between text-xs"><span class="text-slate-500">客户画像</span>' +
+        '<span class="text-slate-700">' + age + " · " + income + " · " + job + " · " + purpose + "</span></div>" +
+        '<div class="flex justify-between text-xs"><span class="text-slate-500">审批建议</span>' +
+        '<span class="text-slate-700">' + suggestion + "</span></div>" +
+        '<div class="flex justify-between text-xs"><span class="text-slate-500">Top 特征解释</span>' +
+        '<span class="text-slate-700 max-w-[200px] text-right">' + topFeat + "</span></div>" +
+        "</div>";
     });
   }
 
