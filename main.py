@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import urllib.error
+import urllib.request
 
 from dotenv import load_dotenv
 
@@ -16,7 +18,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import bcrypt
 from jose import JWTError, jwt
@@ -29,6 +31,18 @@ from pydantic import BaseModel, Field
 DB_PATH = Path(os.environ.get("SQLITE_PATH", "/data/portal.db"))
 SECRET_KEY = os.environ.get("JWT_SECRET", "portal-dev-secret-change-in-prod")
 PORTAL_BRAND_NAME = os.environ.get("PORTAL_BRAND_NAME", "智能体Demo平台")
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+CUSTOMER_SCRIPT_PRODUCT_NAME = "客服话术优化"
+PROJECT_ROOT = Path(__file__).resolve().parent
+FRONTEND_ASSETS = {
+    "": "index.html",
+    "index.html": "index.html",
+    "login.html": "login.html",
+    "detail.html": "detail.html",
+    "portal-brand.js": "portal-brand.js",
+    "portal-demos.js": "portal-demos.js",
+}
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 
@@ -501,6 +515,36 @@ class ProductDetailOut(BaseModel):
     detail_intro: str
 
 
+class CustomerScriptRequest(BaseModel):
+    product_id: int
+    intent: str = Field(min_length=1, max_length=40)
+    customer_message: str = Field(min_length=1, max_length=500)
+
+
+class CustomerScriptSuggestion(BaseModel):
+    sentiment: str
+    sentiment_label: str
+    sentiment_score: int = Field(ge=0, le=100)
+    reply: str
+    steps: list[str]
+    escalation: str
+    forbidden_words: list[str]
+
+
+class CustomerScriptResponse(BaseModel):
+    success: bool
+    data: CustomerScriptSuggestion | None = None
+    message: str = ""
+
+
+class DeepSeekConfigError(RuntimeError):
+    """DeepSeek integration is not configured for this deployment."""
+
+
+class DeepSeekResponseError(RuntimeError):
+    """DeepSeek returned an unusable response."""
+
+
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------
@@ -544,6 +588,136 @@ def product_visible_for_user(row: sqlite3.Row, user: dict[str, Any]) -> bool:
     if scope and role in ("Director", "USER"):
         return user.get("industry") == scope
     return True
+
+
+def _json_object_from_text(text: str) -> dict[str, Any]:
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`").strip()
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start < 0 or end <= start:
+            raise DeepSeekResponseError("模型未返回有效 JSON") from None
+        data = json.loads(cleaned[start : end + 1])
+    if not isinstance(data, dict):
+        raise DeepSeekResponseError("模型响应格式不是 JSON 对象")
+    return data
+
+
+def _string_list(value: Any, fallback: list[str]) -> list[str]:
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return items or fallback
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return fallback
+
+
+def _clamp_score(value: Any, fallback: int) -> int:
+    try:
+        score = int(value)
+    except (TypeError, ValueError):
+        score = fallback
+    return max(0, min(100, score))
+
+
+def _sentiment_label_and_score(raw: dict[str, Any]) -> tuple[str, int]:
+    raw_label = str(raw.get("sentiment_label") or raw.get("sentiment") or "").strip()
+    text = raw_label.lower()
+    if any(word in text for word in ("高风险", "强烈", "愤怒", "angry", "severe", "high")):
+        label, fallback = "高风险负面", 88
+    elif any(word in text for word in ("负面", "投诉", "不满", "差评", "negative", "complaint")):
+        label, fallback = "偏负面", 72
+    elif any(word in text for word in ("neutral", "中性", "一般")):
+        label, fallback = "中性", 45
+    elif any(word in text for word in ("正向", "满意", "positive", "happy")):
+        label, fallback = "正向", 24
+    else:
+        label, fallback = raw_label or "需人工复核", 55
+    return label, _clamp_score(raw.get("sentiment_score"), fallback)
+
+
+def _normalize_customer_script_suggestion(raw: dict[str, Any]) -> CustomerScriptSuggestion:
+    sentiment_label, sentiment_score = _sentiment_label_and_score(raw)
+    return CustomerScriptSuggestion(
+        sentiment=str(raw.get("sentiment") or "需人工复核").strip(),
+        sentiment_label=sentiment_label,
+        sentiment_score=sentiment_score,
+        reply=str(raw.get("reply") or "请先安抚客户情绪，并承诺核查后给出明确回访时间。").strip(),
+        steps=_string_list(raw.get("steps"), ["确认问题", "表达歉意", "给出处理时限"]),
+        escalation=str(raw.get("escalation") or "若客户持续强烈投诉，升级给主管处理。").strip(),
+        forbidden_words=_string_list(raw.get("forbidden_words"), ["这不是我们的问题", "你自己看规则"]),
+    )
+
+
+def request_deepseek_customer_script(intent: str, customer_message: str) -> CustomerScriptSuggestion:
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not api_key:
+        raise DeepSeekConfigError("未配置 DeepSeek API Key")
+
+    base_url = os.environ.get("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL).rstrip("/")
+    model = os.environ.get("DEEPSEEK_MODEL", DEEPSEEK_MODEL).strip() or DEEPSEEK_MODEL
+    timeout = float(os.environ.get("DEEPSEEK_TIMEOUT", "20"))
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是电商/物流客服质检专家。根据客户原话和客户意图，生成坐席可直接使用的中文话术。"
+                    "只输出 JSON 对象，不要输出 Markdown。字段必须包含：sentiment、sentiment_label、"
+                    "sentiment_score、reply、steps、escalation、forbidden_words。"
+                    "sentiment_label 使用 正向/中性/偏负面/高风险负面 之一；sentiment_score 是 0-100 整数。"
+                    "steps 和 forbidden_words 必须是字符串数组。"
+                    "话术要先安抚，再确认动作和时限，避免承诺无法兑现的赔付。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "intent": intent,
+                        "customer_message": customer_message,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+        "temperature": 0.3,
+        "max_tokens": 700,
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")[:300]
+        raise DeepSeekResponseError(f"DeepSeek API 返回错误：{exc.code} {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise DeepSeekResponseError(f"DeepSeek API 请求失败：{exc.reason}") from exc
+    except TimeoutError as exc:
+        raise DeepSeekResponseError("DeepSeek API 请求超时") from exc
+
+    try:
+        data = json.loads(body)
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise DeepSeekResponseError("DeepSeek API 响应结构异常") from exc
+    return _normalize_customer_script_suggestion(_json_object_from_text(content))
 
 
 # -----------------------------------------------------------------------------
@@ -655,6 +829,53 @@ def get_product(
     )
 
 
+@app.post("/api/customer-script/suggest", response_model=CustomerScriptResponse)
+def suggest_customer_script(
+    body: CustomerScriptRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> CustomerScriptResponse:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (body.product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != CUSTOMER_SCRIPT_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+
+    try:
+        suggestion = request_deepseek_customer_script(body.intent, body.customer_message)
+    except DeepSeekConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except DeepSeekResponseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    if not isinstance(suggestion, CustomerScriptSuggestion):
+        suggestion = _normalize_customer_script_suggestion(suggestion)
+    return CustomerScriptResponse(success=True, data=suggestion)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/{asset_path:path}", include_in_schema=False)
+def frontend_asset(asset_path: str) -> FileResponse:
+    filename = FRONTEND_ASSETS.get(asset_path)
+    if filename is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    path = PROJECT_ROOT / filename
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    return FileResponse(path)

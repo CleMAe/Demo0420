@@ -410,29 +410,169 @@
     });
   }
 
-  function demoCxBot(root) {
+  function demoCxBot(root, product) {
     root.innerHTML = shell("坐席侧话术与情绪", (
+      '<div class="grid gap-4 sm:grid-cols-[1fr_1.1fr]">' +
+      '<div class="space-y-4">' +
       '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4">' +
-      '<p class="text-xs font-medium text-slate-600">当前会话情绪倾向（模拟）</p>' +
+      '<div class="flex items-center justify-between gap-3">' +
+      '<p class="text-xs font-medium text-slate-600">当前会话情绪倾向</p>' +
+      '<span class="rounded-lg bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700">DeepSeek</span>' +
+      "</div>" +
       '<div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">' +
-      '<div data-slot="meter" class="h-full w-[72%] rounded-full bg-gradient-to-r from-amber-400 to-orange-500"></div></div>' +
-      '<p class="mt-1 text-xs text-slate-500">偏负面 72% · 建议安抚与升级策略</p></div>' +
-      '<label class="mt-4 block text-xs font-medium text-slate-600">客户意图</label>' +
-      '<select data-field="intent" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      '<div data-slot="meter" class="h-full w-0 rounded-full bg-gradient-to-r from-slate-300 to-slate-400"></div></div>' +
+      '<p data-slot="sentiment-summary" class="mt-1 text-xs text-slate-500">等待生成 · 将随客户原话更新</p></div>' +
+      '<label class="block text-xs font-medium text-slate-600">客户意图</label>' +
+      '<select data-field="intent" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
       "<option>投诉配送延迟</option>" +
       "<option>要求退费</option>" +
+      "<option>态度投诉</option>" +
       "</select>" +
-      '<button type="button" data-action="suggest" class="mt-3 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">生成话术建议</button>' +
-      '<div data-slot="sug" class="mt-3 hidden rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 text-sm text-emerald-900"></div>'
+      '<label class="block text-xs font-medium text-slate-600">客户原话</label>' +
+      '<textarea data-field="message" rows="5" class="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed outline-none ring-orange-500/20 transition focus:border-orange-500 focus:ring-4">等了一周还没送到，必须给我说法。</textarea>' +
+      '<button type="button" data-action="suggest" class="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">生成话术建议</button>' +
+      "</div>" +
+      '<div data-slot="sug" class="hidden rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 text-sm text-emerald-950"></div>' +
+      "</div>"
     ));
+    function apiBase() {
+      if (!window.location.host) return "http://127.0.0.1";
+      return "";
+    }
+    function renderList(items, emptyText) {
+      var list = Array.isArray(items) ? items : [];
+      if (!list.length) return '<li>' + escapeHtml(emptyText) + '</li>';
+      return list.map(function (item) {
+        return '<li>' + escapeHtml(item) + '</li>';
+      }).join("");
+    }
+    function updateSentimentCard(data) {
+      var meta = sentimentMeta(data || {});
+      var meter = root.querySelector("[data-slot=\"meter\"]");
+      var summary = root.querySelector("[data-slot=\"sentiment-summary\"]");
+      if (meter) {
+        meter.style.width = meta.score + "%";
+        meter.className = meta.barClass;
+      }
+      if (summary) {
+        summary.textContent = meta.label + " " + meta.score + "% · " + meta.hint;
+      }
+    }
     bind(root, "[data-action=\"suggest\"]", "click", function () {
       var intent = root.querySelector("[data-field=\"intent\"]").value;
+      var message = root.querySelector("[data-field=\"message\"]").value.trim();
       var out = root.querySelector("[data-slot=\"sug\"]");
+      var btn = root.querySelector("[data-action=\"suggest\"]");
+      var token = localStorage.getItem("portal_token");
       out.classList.remove("hidden");
-      out.textContent =
-        "建议话术：非常抱歉让您久等了。我已为您加急查询运单，预计今日内回复处理方案；同时可申请一张心意补偿券（模拟）。" +
-        " 场景：" + intent;
+      if (!message) {
+        out.className = "rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm text-red-700";
+        out.textContent = "请先输入客户原话。";
+        return;
+      }
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 生成中";
+      out.className = "rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700";
+      out.innerHTML = '<p class="flex items-center gap-2 text-sm text-slate-600">' + spinHtml() + " 正在请求 DeepSeek 生成话术建议…</p>";
+      updateSentimentCard({ sentiment_label: "分析中", sentiment_score: 18 });
+      fetch(apiBase() + "/api/customer-script/suggest", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product_id: product && product.id,
+          intent: intent,
+          customer_message: message
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error((data && data.detail) || "生成失败");
+            return data;
+          });
+        })
+        .then(function (body) {
+          var data = body.data || {};
+          updateSentimentCard(data);
+          out.className = "rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 text-sm text-emerald-950";
+          out.innerHTML =
+            '<p class="text-xs font-semibold text-emerald-700">情绪判断</p>' +
+            '<p class="mt-1 font-medium">' + escapeHtml(data.sentiment_label || data.sentiment || "需人工复核") + '</p>' +
+            '<p class="mt-4 text-xs font-semibold text-emerald-700">推荐话术</p>' +
+            '<p class="mt-1 leading-relaxed">' + escapeHtml(data.reply || "请先安抚客户情绪，并承诺核查后给出明确回访时间。") + '</p>' +
+            '<p class="mt-4 text-xs font-semibold text-emerald-700">处理步骤</p>' +
+            '<ol class="mt-1 list-decimal space-y-1 pl-5">' + renderList(data.steps, "确认问题并给出处理时限") + '</ol>' +
+            '<p class="mt-4 text-xs font-semibold text-emerald-700">升级策略</p>' +
+            '<p class="mt-1 leading-relaxed">' + escapeHtml(data.escalation || "若客户持续强烈投诉，升级给主管处理。") + '</p>' +
+            '<p class="mt-4 text-xs font-semibold text-emerald-700">禁用词提醒</p>' +
+            '<ul class="mt-1 list-disc space-y-1 pl-5">' + renderList(data.forbidden_words, "避免推诿和绝对化承诺") + '</ul>';
+        })
+        .catch(function (ex) {
+          updateSentimentCard({ sentiment_label: "生成失败", sentiment_score: 0 });
+          out.className = "rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm leading-relaxed text-red-700";
+          out.textContent = ex.message || "生成失败，请稍后重试。";
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "生成话术建议";
+        });
     });
+  }
+
+  function clampSentimentScore(value, fallback) {
+    var score = Number(value);
+    if (!Number.isFinite(score)) score = fallback;
+    return Math.max(0, Math.min(100, Math.round(score)));
+  }
+
+  function sentimentMeta(data) {
+    var raw = data || {};
+    var label = String(raw.sentiment_label || raw.sentiment || "需人工复核").trim();
+    var text = label.toLowerCase();
+    var score;
+    var hint;
+    var barClass;
+    if (text.indexOf("高风险") >= 0 || text.indexOf("强烈") >= 0 || text.indexOf("愤怒") >= 0 || text.indexOf("angry") >= 0 || text.indexOf("severe") >= 0 || text.indexOf("high") >= 0) {
+      label = "高风险负面";
+      score = clampSentimentScore(raw.sentiment_score, 88);
+      hint = "高风险负面，建议安抚并升级";
+      barClass = "h-full rounded-full bg-gradient-to-r from-orange-500 to-red-500";
+    } else if (text.indexOf("负面") >= 0 || text.indexOf("投诉") >= 0 || text.indexOf("不满") >= 0 || text.indexOf("差评") >= 0 || text.indexOf("negative") >= 0 || text.indexOf("complaint") >= 0) {
+      label = "偏负面";
+      score = clampSentimentScore(raw.sentiment_score, 72);
+      hint = "偏负面，优先安抚与解释";
+      barClass = "h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500";
+    } else if (text.indexOf("neutral") >= 0 || text.indexOf("中性") >= 0 || text.indexOf("一般") >= 0) {
+      label = "中性";
+      score = clampSentimentScore(raw.sentiment_score, 45);
+      hint = "模型判断为中性，保持解释清晰";
+      barClass = "h-full rounded-full bg-gradient-to-r from-sky-400 to-cyan-500";
+    } else if (text.indexOf("正向") >= 0 || text.indexOf("满意") >= 0 || text.indexOf("positive") >= 0 || text.indexOf("happy") >= 0) {
+      label = "正向";
+      score = clampSentimentScore(raw.sentiment_score, 24);
+      hint = "正向，保持响应效率";
+      barClass = "h-full rounded-full bg-gradient-to-r from-emerald-400 to-green-500";
+    } else if (text.indexOf("分析中") >= 0) {
+      score = clampSentimentScore(raw.sentiment_score, 18);
+      hint = "正在分析客户原话";
+      barClass = "h-full rounded-full bg-gradient-to-r from-slate-300 to-slate-400";
+    } else if (text.indexOf("失败") >= 0) {
+      score = clampSentimentScore(raw.sentiment_score, 0);
+      hint = "本次未完成情绪判断";
+      barClass = "h-full rounded-full bg-gradient-to-r from-slate-300 to-slate-400";
+    } else {
+      score = clampSentimentScore(raw.sentiment_score, 55);
+      hint = "需人工复核情绪风险";
+      barClass = "h-full rounded-full bg-gradient-to-r from-slate-400 to-slate-500";
+    }
+    return {
+      label: label,
+      score: score,
+      hint: hint,
+      barClass: barClass
+    };
   }
 
   function demoAdminRouter(root) {
@@ -759,5 +899,5 @@
     }
   }
 
-  window.PortalDemos = { mount: mount };
+  window.PortalDemos = { mount: mount, sentimentMeta: sentimentMeta };
 })();
