@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir \
     --timeout "${PIP_DEFAULT_TIMEOUT}" \
     -r requirements.txt
 
-COPY main.py .
+COPY main.py login.html index.html detail.html portal-brand.js portal-demos.js ./
 
 EXPOSE 8000
 
