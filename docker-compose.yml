@@ -14,17 +14,13 @@ services:
     restart: unless-stopped
 
   web:
-    image: nginx:1.27-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: demo0420-web
     container_name: portal-web
     ports:
       - "80:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./login.html:/usr/share/nginx/html/login.html:ro
-      - ./index.html:/usr/share/nginx/html/index.html:ro
-      - ./detail.html:/usr/share/nginx/html/detail.html:ro
-      - ./portal-brand.js:/usr/share/nginx/html/portal-brand.js:ro
-      - ./portal-demos.js:/usr/share/nginx/html/portal-demos.js:ro
     depends_on:
       - api
     restart: unless-stopped
