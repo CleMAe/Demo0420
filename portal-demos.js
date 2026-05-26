@@ -905,6 +905,7 @@
 
     var currentDoc = "服务合同";
     var chatHistory = [];
+    var chatVersion = 0;
 
     function renderDocView() {
       var doc = DOCS[currentDoc];
@@ -1059,6 +1060,7 @@
         var newDoc = btn.getAttribute("data-tab");
         if (newDoc === currentDoc) return;
         currentDoc = newDoc;
+        chatVersion++;
         root.querySelectorAll("[data-tab]").forEach(function (b) {
           b.className = "rounded-full px-3.5 py-1.5 text-xs font-medium transition " +
             (b.getAttribute("data-tab") === currentDoc ? "bg-orange-500 text-white shadow-sm shadow-orange-500/25" : "bg-slate-100 text-slate-600 hover:bg-slate-200");
@@ -1073,6 +1075,8 @@
       var inp = root.querySelector("[data-field=\"question\"]");
       var question = inp.value.trim();
       if (!question) return;
+      var docAtAsk = currentDoc;
+      var versionAtAsk = chatVersion;
       addChatBubble("user", escapeHtml(question), null);
       chatHistory.push({ role: "user", text: question });
       inp.value = "";
@@ -1086,7 +1090,8 @@
       setTimeout(function () {
         var loader = chatEl.querySelector("[data-loading]");
         if (loader) loader.remove();
-        var result = matchQA(question, currentDoc);
+        if (versionAtAsk !== chatVersion || docAtAsk !== currentDoc) return;
+        var result = matchQA(question, docAtAsk);
         addChatBubble("ai", result.answer, result.ref);
         chatHistory.push({ role: "ai", text: result.answer, ref: result.ref });
       }, 800);
@@ -1111,6 +1116,7 @@
     });
 
     bind(root, "[data-action=\"clear\"]", "click", function () {
+      chatVersion++;
       chatHistory = [];
       root.querySelector("[data-slot=\"chat\"]").innerHTML = "";
     });
