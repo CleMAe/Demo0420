@@ -410,28 +410,99 @@
     });
   }
 
-  function demoCxBot(root) {
+  function demoCxBot(root, product) {
     root.innerHTML = shell("坐席侧话术与情绪", (
+      '<div class="grid gap-4 sm:grid-cols-[1fr_1.1fr]">' +
+      '<div class="space-y-4">' +
       '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4">' +
-      '<p class="text-xs font-medium text-slate-600">当前会话情绪倾向（模拟）</p>' +
+      '<div class="flex items-center justify-between gap-3">' +
+      '<p class="text-xs font-medium text-slate-600">当前会话情绪倾向</p>' +
+      '<span class="rounded-lg bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700">DeepSeek</span>' +
+      "</div>" +
       '<div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">' +
       '<div data-slot="meter" class="h-full w-[72%] rounded-full bg-gradient-to-r from-amber-400 to-orange-500"></div></div>' +
       '<p class="mt-1 text-xs text-slate-500">偏负面 72% · 建议安抚与升级策略</p></div>' +
-      '<label class="mt-4 block text-xs font-medium text-slate-600">客户意图</label>' +
-      '<select data-field="intent" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      '<label class="block text-xs font-medium text-slate-600">客户意图</label>' +
+      '<select data-field="intent" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
       "<option>投诉配送延迟</option>" +
       "<option>要求退费</option>" +
+      "<option>态度投诉</option>" +
       "</select>" +
-      '<button type="button" data-action="suggest" class="mt-3 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">生成话术建议</button>' +
-      '<div data-slot="sug" class="mt-3 hidden rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 text-sm text-emerald-900"></div>'
+      '<label class="block text-xs font-medium text-slate-600">客户原话</label>' +
+      '<textarea data-field="message" rows="5" class="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed outline-none ring-orange-500/20 transition focus:border-orange-500 focus:ring-4">等了一周还没送到，必须给我说法。</textarea>' +
+      '<button type="button" data-action="suggest" class="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">生成话术建议</button>' +
+      "</div>" +
+      '<div data-slot="sug" class="hidden rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 text-sm text-emerald-950"></div>' +
+      "</div>"
     ));
+    function apiBase() {
+      if (!window.location.host) return "http://127.0.0.1";
+      return "";
+    }
+    function renderList(items, emptyText) {
+      var list = Array.isArray(items) ? items : [];
+      if (!list.length) return '<li>' + escapeHtml(emptyText) + '</li>';
+      return list.map(function (item) {
+        return '<li>' + escapeHtml(item) + '</li>';
+      }).join("");
+    }
     bind(root, "[data-action=\"suggest\"]", "click", function () {
       var intent = root.querySelector("[data-field=\"intent\"]").value;
+      var message = root.querySelector("[data-field=\"message\"]").value.trim();
       var out = root.querySelector("[data-slot=\"sug\"]");
+      var btn = root.querySelector("[data-action=\"suggest\"]");
+      var token = localStorage.getItem("portal_token");
       out.classList.remove("hidden");
-      out.textContent =
-        "建议话术：非常抱歉让您久等了。我已为您加急查询运单，预计今日内回复处理方案；同时可申请一张心意补偿券（模拟）。" +
-        " 场景：" + intent;
+      if (!message) {
+        out.className = "rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm text-red-700";
+        out.textContent = "请先输入客户原话。";
+        return;
+      }
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 生成中";
+      out.className = "rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700";
+      out.innerHTML = '<p class="flex items-center gap-2 text-sm text-slate-600">' + spinHtml() + " 正在请求 DeepSeek 生成话术建议…</p>";
+      fetch(apiBase() + "/api/customer-script/suggest", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product_id: product && product.id,
+          intent: intent,
+          customer_message: message
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error((data && data.detail) || "生成失败");
+            return data;
+          });
+        })
+        .then(function (body) {
+          var data = body.data || {};
+          out.className = "rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 text-sm text-emerald-950";
+          out.innerHTML =
+            '<p class="text-xs font-semibold text-emerald-700">情绪判断</p>' +
+            '<p class="mt-1 font-medium">' + escapeHtml(data.sentiment || "需人工复核") + '</p>' +
+            '<p class="mt-4 text-xs font-semibold text-emerald-700">推荐话术</p>' +
+            '<p class="mt-1 leading-relaxed">' + escapeHtml(data.reply || "请先安抚客户情绪，并承诺核查后给出明确回访时间。") + '</p>' +
+            '<p class="mt-4 text-xs font-semibold text-emerald-700">处理步骤</p>' +
+            '<ol class="mt-1 list-decimal space-y-1 pl-5">' + renderList(data.steps, "确认问题并给出处理时限") + '</ol>' +
+            '<p class="mt-4 text-xs font-semibold text-emerald-700">升级策略</p>' +
+            '<p class="mt-1 leading-relaxed">' + escapeHtml(data.escalation || "若客户持续强烈投诉，升级给主管处理。") + '</p>' +
+            '<p class="mt-4 text-xs font-semibold text-emerald-700">禁用词提醒</p>' +
+            '<ul class="mt-1 list-disc space-y-1 pl-5">' + renderList(data.forbidden_words, "避免推诿和绝对化承诺") + '</ul>';
+        })
+        .catch(function (ex) {
+          out.className = "rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm leading-relaxed text-red-700";
+          out.textContent = ex.message || "生成失败，请稍后重试。";
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "生成话术建议";
+        });
     });
   }
 
