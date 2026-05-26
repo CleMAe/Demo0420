@@ -331,6 +331,12 @@ def _ensure_seed_products(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_med_imaging_content(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS _meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)"
+    )
+    meta_key = "med_imaging_content_v1"
+    if conn.execute("SELECT 1 FROM _meta WHERE k = ?", (meta_key,)).fetchone():
+        return
     for name, desc, _url, badge, _roles, industry_scope, tech_stack, nav_ind, detail in PRODUCTS_SEED:
         if name != "医疗影像辅助诊断":
             continue
@@ -339,6 +345,10 @@ def _ensure_med_imaging_content(conn: sqlite3.Connection) -> None:
                SET description = ?, badge = ?, industry_scope = ?, tech_stack = ?, nav_industry = ?, detail_intro = ?
                WHERE name = ?""",
             (desc, badge, industry_scope, tech_stack, nav_ind, detail, name),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO _meta (k, v) VALUES (?, ?)",
+            (meta_key, "1"),
         )
         return
 
