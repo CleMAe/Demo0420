@@ -348,19 +348,239 @@
   }
 
   function demoMedImaging(root) {
-    root.innerHTML = shell("影像浏览与初筛（演示）", (
-      '<div class="relative aspect-video max-h-56 w-full overflow-hidden rounded-xl border border-slate-200 bg-gradient-to-br from-slate-800 to-slate-600">' +
-      '<div class="absolute inset-0 opacity-40" style="background-image:radial-gradient(circle at 30% 40%,#fff 0.5px,transparent 0.5px);background-size:8px 8px"></div>' +
-      '<button type="button" data-action="pin" class="absolute left-[38%] top-[42%] flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-orange-400 bg-orange-500/90 text-xs font-bold text-white shadow-lg">' +
-      "!" +
-      "</button>" +
-      '<p class="absolute bottom-2 left-2 rounded bg-black/50 px-2 py-1 text-xs text-white">DICOM 预览 · 模拟</p></div>' +
-      '<p data-slot="note" class="mt-3 text-xs text-slate-500">点击热点查看模拟提示（非诊断结论）。</p>'
-    ));
-    bind(root, "[data-action=\"pin\"]", "click", function () {
-      root.querySelector("[data-slot=\"note\"]").innerHTML =
-        '<span class="font-medium text-orange-700">初筛提示：</span>局部密度增高影，建议由执业医师结合病史进一步评估（模拟）。';
-    });
+    var cases = [
+      {
+        title: "胸部 CT · 肺窗复核",
+        patient: "模拟患者 A · 52 岁",
+        accession: "SIM-CT-0420-A",
+        modality: "CT",
+        body: "胸部",
+        triage: "中优先级",
+        triageCls: "border-amber-200 bg-amber-50 text-amber-800",
+        confidence: "0.78",
+        queue: "影像科待复核",
+        series: ["肺窗", "纵隔窗", "MIP"],
+        finding: "右上肺外周见磨玻璃密度候选区，边界较淡，建议结合薄层重建与既往片复核。",
+        action: "24 小时内完成放射科医师复核，必要时安排随访影像。",
+        impression: "右上肺磨玻璃密度影候选提示，建议结合薄层 CT 与既往片对比。",
+        scanStyle: "background:radial-gradient(ellipse at 50% 54%, rgba(226,232,240,.45) 0 18%, transparent 19%), radial-gradient(ellipse at 36% 52%, rgba(148,163,184,.35) 0 11%, transparent 12%), radial-gradient(ellipse at 64% 52%, rgba(148,163,184,.32) 0 11%, transparent 12%), linear-gradient(135deg,#0f172a,#334155);",
+        spots: [
+          {
+            label: "候选灶 A",
+            cls: "border-orange-400 bg-orange-500/10",
+            x: 62,
+            y: 38,
+            w: 16,
+            h: 18,
+            note: "右上肺外周磨玻璃影候选区，算法置信度 0.78。"
+          },
+          {
+            label: "对照区",
+            cls: "border-emerald-400 bg-emerald-500/10",
+            x: 35,
+            y: 48,
+            w: 15,
+            h: 16,
+            note: "左肺对照区未见明显异常候选框。"
+          }
+        ]
+      },
+      {
+        title: "头颅 MRI · 急诊筛查",
+        patient: "模拟患者 B · 67 岁",
+        accession: "SIM-MR-0420-B",
+        modality: "MRI",
+        body: "头颅",
+        triage: "高优先级",
+        triageCls: "border-red-200 bg-red-50 text-red-700",
+        confidence: "0.86",
+        queue: "急诊优先复核",
+        series: ["DWI", "FLAIR", "T2"],
+        finding: "左侧基底节区可疑高信号候选区，需结合临床症状与原始序列进一步判断。",
+        action: "建议急诊影像医师优先复核，并同步提示临床团队关注时间窗。",
+        impression: "左侧基底节区高信号候选提示，需排除急性缺血相关改变。",
+        scanStyle: "background:radial-gradient(ellipse at 49% 50%, rgba(226,232,240,.58) 0 24%, transparent 25%), radial-gradient(ellipse at 42% 48%, rgba(100,116,139,.65) 0 7%, transparent 8%), radial-gradient(ellipse at 58% 51%, rgba(148,163,184,.45) 0 8%, transparent 9%), linear-gradient(135deg,#111827,#475569);",
+        spots: [
+          {
+            label: "急性候选区",
+            cls: "border-red-400 bg-red-500/10",
+            x: 40,
+            y: 42,
+            w: 13,
+            h: 15,
+            note: "左侧基底节区高信号候选区，需优先人工复核。"
+          },
+          {
+            label: "脑室定位",
+            cls: "border-sky-300 bg-sky-500/10",
+            x: 55,
+            y: 48,
+            w: 10,
+            h: 12,
+            note: "解剖定位参考区，用于辅助阅片方向判断。"
+          }
+        ]
+      },
+      {
+        title: "膝关节 X 线 · 骨科初筛",
+        patient: "模拟患者 C · 41 岁",
+        accession: "SIM-XR-0420-C",
+        modality: "X-Ray",
+        body: "膝关节",
+        triage: "低优先级",
+        triageCls: "border-emerald-200 bg-emerald-50 text-emerald-700",
+        confidence: "0.64",
+        queue: "门诊常规复核",
+        series: ["正位", "侧位", "髌骨轴位"],
+        finding: "关节间隙轻度变窄候选提示，未见明确急性骨折候选框。",
+        action: "建议门诊常规复核，结合体格检查评估退变程度。",
+        impression: "膝关节退变候选提示，未见明确急性骨折候选框。",
+        scanStyle: "background:linear-gradient(90deg, transparent 0 39%, rgba(226,232,240,.72) 40% 45%, transparent 46% 54%, rgba(203,213,225,.74) 55% 61%, transparent 62%), radial-gradient(ellipse at 50% 62%, rgba(148,163,184,.48) 0 18%, transparent 19%), linear-gradient(135deg,#1f2937,#64748b);",
+        spots: [
+          {
+            label: "关节间隙",
+            cls: "border-amber-300 bg-amber-500/10",
+            x: 43,
+            y: 56,
+            w: 20,
+            h: 10,
+            note: "关节间隙轻度变窄候选提示，建议结合临床症状复核。"
+          },
+          {
+            label: "骨皮质",
+            cls: "border-emerald-400 bg-emerald-500/10",
+            x: 34,
+            y: 29,
+            w: 12,
+            h: 22,
+            note: "骨皮质连续性候选检查未提示明确急性骨折。"
+          }
+        ]
+      }
+    ];
+    var current = 0;
+    var activeSpot = 0;
+    var seriesIndex = 0;
+    var reviewed = {};
+    var reportReady = {};
+
+    function render() {
+      var item = cases[current];
+      var spot = item.spots[activeSpot] || item.spots[0];
+      var confPct = Math.round(Number(item.confidence) * 100);
+      var reportHtml = reportReady[current] ? (
+        '<div class="mt-3 space-y-2 rounded-xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600">' +
+        '<p><span class="font-medium text-slate-900">检查号：</span>' + escapeHtml(item.accession) + '</p>' +
+        '<p><span class="font-medium text-slate-900">影像所见：</span>' + escapeHtml(item.finding) + '</p>' +
+        '<p><span class="font-medium text-slate-900">初筛印象：</span>' + escapeHtml(item.impression) + '</p>' +
+        '<p><span class="font-medium text-slate-900">建议：</span>' + escapeHtml(item.action) + '</p>' +
+        '<p class="border-t border-slate-100 pt-2 text-red-600">AI 草稿仅用于演示，需放射科医师签发后才可进入正式报告。</p>' +
+        '</div>'
+      ) : (
+        '<p class="mt-3 text-xs leading-relaxed text-slate-500">生成后展示结构化报告草稿：检查号、影像所见、初筛印象、建议和免责声明。</p>'
+      );
+      root.innerHTML = shell("医疗影像初筛工作台", (
+        '<div class="grid gap-4 lg:grid-cols-5">' +
+        '<div class="space-y-3 lg:col-span-3">' +
+        '<div class="relative aspect-video max-h-80 w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-900 shadow-inner" style="' + item.scanStyle + '">' +
+        '<div class="absolute inset-0 opacity-25" style="background-image:linear-gradient(rgba(255,255,255,.14) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.1) 1px, transparent 1px);background-size:22px 22px"></div>' +
+        '<div class="absolute left-3 top-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs font-medium text-white">' + escapeHtml(item.modality) + " · " + escapeHtml(item.series[seriesIndex]) + '</div>' +
+        '<div class="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs text-white">DICOM Preview · 模拟影像</div>' +
+        item.spots.map(function (s, i) {
+          var active = i === activeSpot ? " ring-4 ring-white/50" : " opacity-75 hover:opacity-100";
+          return (
+            '<button type="button" data-spot="' + i + '" aria-label="' + escapeHtml(s.label) + '" ' +
+            'class="absolute rounded-lg border-2 shadow-lg transition ' + s.cls + active + '" ' +
+            'style="left:' + s.x + '%;top:' + s.y + '%;width:' + s.w + '%;height:' + s.h + '%;transform:translate(-50%,-50%)"></button>'
+          );
+        }).join("") +
+        '</div>' +
+        '<div class="grid gap-2 sm:grid-cols-3">' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-400">模态</p><p class="mt-1 text-sm font-semibold text-slate-900">' + escapeHtml(item.modality) + '</p></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-400">部位</p><p class="mt-1 text-sm font-semibold text-slate-900">' + escapeHtml(item.body) + '</p></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-400">置信度</p><p class="mt-1 text-sm font-semibold text-slate-900">' + escapeHtml(item.confidence) + '</p><div class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100"><span class="block h-full rounded-full bg-orange-500" style="width:' + confPct + '%"></span></div></div>' +
+        '</div>' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+        '<div class="flex flex-wrap items-center justify-between gap-2"><p class="text-sm font-semibold text-slate-900">质控清单</p><span class="text-xs text-slate-400">' + escapeHtml(item.accession) + '</span></div>' +
+        '<div class="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">' +
+        '<p class="rounded-lg bg-emerald-50 px-2.5 py-2 text-emerald-700">已脱敏模拟病例</p>' +
+        '<p class="rounded-lg bg-emerald-50 px-2.5 py-2 text-emerald-700">影像质量可读</p>' +
+        '<p class="rounded-lg bg-emerald-50 px-2.5 py-2 text-emerald-700">候选框可定位</p>' +
+        '<p class="rounded-lg px-2.5 py-2 ' + (reviewed[current] ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700") + '">' + (reviewed[current] ? "人工复核已记录" : "等待人工复核") + '</p>' +
+        '</div></div></div>' +
+        '<div class="space-y-4 lg:col-span-2">' +
+        '<label class="block text-xs font-medium text-slate-600">模拟病例</label>' +
+        '<select data-field="case" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-orange-500/20 focus:border-orange-500 focus:ring-4">' +
+        cases.map(function (c, i) {
+          return '<option value="' + i + '"' + (i === current ? " selected" : "") + ">" + escapeHtml(c.title) + "</option>";
+        }).join("") +
+        '</select>' +
+        '<div><p class="mb-2 text-xs font-medium text-slate-600">阅片序列</p><div class="flex flex-wrap gap-2">' +
+        item.series.map(function (name, i) {
+          var cls = i === seriesIndex ? "border-orange-500 bg-orange-50 text-orange-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50";
+          return '<button type="button" data-series="' + i + '" class="rounded-lg border px-3 py-1.5 text-xs font-medium transition ' + cls + '">' + escapeHtml(name) + "</button>";
+        }).join("") +
+        '</div></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+        '<div class="flex flex-wrap items-center justify-between gap-2">' +
+        '<p class="text-sm font-semibold text-slate-900">' + escapeHtml(item.patient) + '</p>' +
+        '<span class="rounded-lg border px-2.5 py-1 text-xs font-medium ' + item.triageCls + '">' + escapeHtml(item.triage) + '</span>' +
+        '</div>' +
+        '<div class="mt-3 space-y-2 text-sm leading-relaxed text-slate-600">' +
+        '<p><span class="font-medium text-slate-900">队列状态：</span>' + escapeHtml(item.queue) + '</p>' +
+        '<p><span class="font-medium text-slate-900">当前标注：</span>' + escapeHtml(spot.label) + '</p>' +
+        '<p>' + escapeHtml(spot.note) + '</p>' +
+        '<p class="border-t border-slate-100 pt-2"><span class="font-medium text-slate-900">初筛摘要：</span>' + escapeHtml(item.finding) + '</p>' +
+        '</div></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-relaxed text-slate-600">' +
+        '<p class="font-medium text-slate-900">复核建议</p>' +
+        '<p class="mt-2">' + escapeHtml(item.action) + '</p>' +
+        '<p data-slot="review-note" class="mt-3 text-xs text-slate-500">' + (reviewed[current] ? "已记录：等待放射科医师复核。" : "待处理：尚未记录人工复核。") + '</p>' +
+        '<button type="button" data-action="review" class="mt-3 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600">' +
+        (reviewed[current] ? "更新复核记录" : "标记待医师复核") +
+        '</button></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4">' +
+        '<div class="flex flex-wrap items-center justify-between gap-2"><p class="text-sm font-semibold text-slate-900">结构化报告草稿</p><span class="rounded-lg bg-slate-200 px-2 py-0.5 text-xs text-slate-600">模拟</span></div>' +
+        '<button type="button" data-action="report" class="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50">' +
+        (reportReady[current] ? "刷新报告草稿" : "生成报告草稿") +
+        '</button>' +
+        reportHtml +
+        '</div>' +
+        '<p class="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-700">演示数据不构成医疗诊断，所有候选提示均需执业医师结合完整病史和原始影像复核。</p>' +
+        '</div></div>'
+      ));
+
+      bind(root, "[data-field=\"case\"]", "change", function (ev) {
+        current = Number(ev.target.value) || 0;
+        activeSpot = 0;
+        seriesIndex = 0;
+        render();
+      });
+      root.querySelectorAll("[data-series]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          seriesIndex = Number(btn.getAttribute("data-series")) || 0;
+          render();
+        });
+      });
+      root.querySelectorAll("[data-spot]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          activeSpot = Number(btn.getAttribute("data-spot")) || 0;
+          render();
+        });
+      });
+      bind(root, "[data-action=\"review\"]", "click", function () {
+        reviewed[current] = true;
+        var note = root.querySelector("[data-slot=\"review-note\"]");
+        if (note) note.textContent = "已记录：等待放射科医师复核。";
+        render();
+      });
+      bind(root, "[data-action=\"report\"]", "click", function () {
+        reportReady[current] = true;
+        render();
+      });
+    }
+
+    render();
   }
 
   function demoClinicalPath(root) {
