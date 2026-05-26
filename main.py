@@ -144,7 +144,8 @@ PRODUCTS_SEED: list[tuple[str, str, str, str | None, list[str], str | None, str,
         "计算机视觉",
         "医疗",
         "演示级影像浏览、标注与初筛提示流程，用于教学或 PoC，非医疗器械声明。\n\n"
-        "可对接院内 PACS 的只读副本做离线分析，强调人机协同与最终诊断由执业医师负责。",
+        "内置胸部 CT、头颅 MRI、骨科 X 线等模拟病例，可展示窗宽/序列切换、异常候选框、置信度与复核建议。\n\n"
+        "所有影像、病例和患者信息均为前端模拟数据，不接入真实 PACS 或病历系统；最终诊断必须由执业医师结合病史、检查结果和原始影像完成。",
     ),
     (
         "临床路径建议引擎",
@@ -336,6 +337,29 @@ def _ensure_seed_products(conn: sqlite3.Connection) -> None:
         )
 
 
+def _ensure_med_imaging_content(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS _meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)"
+    )
+    meta_key = "med_imaging_content_v1"
+    if conn.execute("SELECT 1 FROM _meta WHERE k = ?", (meta_key,)).fetchone():
+        return
+    for name, desc, _url, badge, _roles, industry_scope, tech_stack, nav_ind, detail in PRODUCTS_SEED:
+        if name != "医疗影像辅助诊断":
+            continue
+        conn.execute(
+            """UPDATE products
+               SET description = ?, badge = ?, industry_scope = ?, tech_stack = ?, nav_industry = ?, detail_intro = ?
+               WHERE name = ?""",
+            (desc, badge, industry_scope, tech_stack, nav_ind, detail, name),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO _meta (k, v) VALUES (?, ?)",
+            (meta_key, "1"),
+        )
+        return
+
+
 # -----------------------------------------------------------------------------
 # DB
 # -----------------------------------------------------------------------------
@@ -409,6 +433,7 @@ def init_db() -> None:
                 )
 
         _ensure_seed_products(conn)
+        _ensure_med_imaging_content(conn)
         conn.execute(
             "UPDATE products SET url = ? WHERE name = ?",
             ("", "问数智能体"),
