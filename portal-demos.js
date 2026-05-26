@@ -363,30 +363,120 @@
     });
   }
 
-  function demoClinicalPath(root) {
-    root.innerHTML = shell("临床路径提示", (
-      '<ol class="space-y-2 text-sm">' +
-      ["入院评估与生命体征", "实验室检查组合", "影像/专科会诊", "处置与随访计划"].map(function (t, i) {
-        return (
-          '<li class="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3" data-step="' + i + '">' +
-          '<span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-slate-200 text-xs font-medium text-slate-500">' +
-          (i + 1) + "</span><span>" + escapeHtml(t) + "</span></li>"
-        );
-      }).join("") +
-      "</ol>" +
-      '<button type="button" data-action="next" class="mt-4 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">标记完成下一步（模拟）</button>'
+  function demoClinicalPath(root, product) {
+    root.innerHTML = shell("临床路径建议引擎（模拟 Demo）", (
+      '<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">' +
+      "演示数据不包含真实患者信息，输出仅用于课程 Demo，不构成医疗诊断或处方。" +
+      "</div>" +
+      '<div class="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<p class="mb-3 text-xs font-medium text-slate-600">模拟病程输入</p>' +
+      '<div class="grid gap-3 sm:grid-cols-2">' +
+      '<div><label class="text-[11px] text-slate-500">病种/场景</label>' +
+      '<select data-field="condition" class="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">' +
+      "<option>肺炎</option><option>糖尿病</option><option>急性腹痛</option><option>未分型专科问题</option>" +
+      "</select></div>" +
+      '<div><label class="text-[11px] text-slate-500">路径阶段</label>' +
+      '<select data-field="stage" class="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">' +
+      "<option>初诊评估</option><option>住院第 1 天</option><option>治疗复评</option><option>出院随访</option>" +
+      "</select></div></div>" +
+      '<label class="mt-3 block text-[11px] text-slate-500">症状与病程摘要（模拟）</label>' +
+      '<textarea data-field="symptoms" rows="5" class="mt-0.5 w-full resize-none rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2 text-sm leading-relaxed outline-none ring-orange-500/20 transition focus:border-orange-500 focus:bg-white focus:ring-4">发热 3 天，咳嗽咳痰，活动后气促，血氧略低。</textarea>' +
+      '<button type="button" data-action="suggest-path" class="mt-3 inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">生成路径建议</button>' +
+      "</div>" +
+      '<div data-slot="path-out" class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">填写模拟病程后生成路径建议。</div>' +
+      "</div>"
     ));
-    var step = 0;
-    bind(root, "[data-action=\"next\"]", "click", function () {
-      var lis = root.querySelectorAll("[data-step]");
-      if (step < lis.length) {
-        var li = lis[step];
-        li.className = "flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3";
-        li.querySelector("span:first-child").className =
-          "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-xs font-medium text-white";
-        li.querySelector("span:first-child").textContent = "✓";
-        step++;
+    function apiBase() {
+      if (!window.location.host) return "http://127.0.0.1";
+      return "";
+    }
+    function renderItems(items, emptyText) {
+      var list = Array.isArray(items) ? items : [];
+      if (!list.length) return '<li>' + escapeHtml(emptyText) + '</li>';
+      return list.map(function (item) {
+        return '<li>' + escapeHtml(item) + '</li>';
+      }).join("");
+    }
+    function renderInlineItems(items, emptyText) {
+      var list = Array.isArray(items) ? items : [];
+      if (!list.length) return escapeHtml(emptyText);
+      return list.map(function (item) {
+        return escapeHtml(item);
+      }).join("；");
+    }
+    function riskClass(level) {
+      if (level === "高危") return "bg-red-50 text-red-700 border-red-200";
+      if (level === "中危") return "bg-amber-50 text-amber-700 border-amber-200";
+      return "bg-emerald-50 text-emerald-700 border-emerald-200";
+    }
+    bind(root, "[data-action=\"suggest-path\"]", "click", function () {
+      var condition = root.querySelector("[data-field=\"condition\"]").value;
+      var stage = root.querySelector("[data-field=\"stage\"]").value;
+      var symptoms = root.querySelector("[data-field=\"symptoms\"]").value.trim();
+      var out = root.querySelector("[data-slot=\"path-out\"]");
+      var btn = root.querySelector("[data-action=\"suggest-path\"]");
+      var token = localStorage.getItem("portal_token");
+      if (!symptoms) {
+        out.className = "rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700";
+        out.textContent = "请先输入模拟症状与病程摘要。";
+        return;
       }
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 生成中";
+      out.className = "rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600";
+      out.innerHTML = '<p class="flex items-center gap-2">' + spinHtml() + " 正在匹配临床路径规则库…</p>";
+      fetch(apiBase() + "/api/clinical-pathway/suggest", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product_id: product && product.id,
+          condition: condition,
+          stage: stage,
+          symptoms: symptoms
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error((data && data.detail) || "生成失败");
+            return data;
+          });
+        })
+        .then(function (body) {
+          var data = body.data || {};
+          out.className = "rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700";
+          out.innerHTML =
+            '<div class="flex flex-wrap items-start justify-between gap-2">' +
+            '<div><p class="text-xs font-semibold text-slate-400">路径摘要</p>' +
+            '<p class="mt-1 font-medium text-slate-900">' + escapeHtml(data.summary || "已生成模拟路径建议。") + '</p></div>' +
+            '<span class="rounded-full border px-3 py-1 text-xs font-medium ' + riskClass(data.risk_level) + '">' +
+            escapeHtml(data.risk_level || "常规") + "</span></div>" +
+            '<div class="mt-4 grid gap-3 md:grid-cols-2">' +
+            '<div class="rounded-xl bg-slate-50 p-3"><p class="text-xs font-semibold text-slate-500">下一步处置</p>' +
+            '<ol class="mt-2 list-decimal space-y-1 pl-5">' + renderItems(data.next_steps, "补齐病程信息并人工复核") + '</ol></div>' +
+            '<div class="rounded-xl bg-slate-50 p-3"><p class="text-xs font-semibold text-slate-500">建议检查</p>' +
+            '<ul class="mt-2 list-disc space-y-1 pl-5">' + renderItems(data.checks, "基础检查组合") + '</ul></div>' +
+            '<div class="rounded-xl bg-slate-50 p-3"><p class="text-xs font-semibold text-slate-500">用药注意</p>' +
+            '<ul class="mt-2 list-disc space-y-1 pl-5">' + renderItems(data.medication_notes, "用药需医生复核") + '</ul></div>' +
+            '<div class="rounded-xl bg-slate-50 p-3"><p class="text-xs font-semibold text-slate-500">预警信号</p>' +
+            '<ul class="mt-2 list-disc space-y-1 pl-5">' + renderItems(data.warning_signs, "症状加重需及时复评") + '</ul></div></div>' +
+            '<p class="mt-4 rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-800"><span class="font-semibold">会诊建议：</span>' +
+            escapeHtml(data.consultation || "必要时发起专科会诊。") + "</p>" +
+            '<p class="mt-3 text-xs text-slate-500">依据：' + renderInlineItems(data.references, "院内路径库（演示）") + "</p>" +
+            '<p class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">' +
+            escapeHtml(data.disclaimer || "本结果仅为演示，不构成医疗建议。") + "</p>";
+        })
+        .catch(function (ex) {
+          out.className = "rounded-xl border border-red-200 bg-red-50 p-4 text-sm leading-relaxed text-red-700";
+          out.textContent = ex.message || "生成失败，请稍后重试。";
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "生成路径建议";
+        });
     });
   }
 
