@@ -102,6 +102,24 @@ def test_customer_script_api_returns_structured_suggestion(monkeypatch, tmp_path
     }
 
 
+def test_customer_script_normalizes_model_sentiment(monkeypatch, tmp_path):
+    app_module = load_app(monkeypatch, tmp_path)
+
+    suggestion = app_module._normalize_customer_script_suggestion(
+        {
+            "sentiment": "neutral",
+            "reply": "我理解您的顾虑，会先核实情况再给出处理方案。",
+            "steps": ["安抚客户", "核实问题"],
+            "escalation": "如客户继续不满，升级主管处理。",
+            "forbidden_words": ["你自己看"],
+        }
+    )
+
+    assert suggestion.sentiment == "neutral"
+    assert suggestion.sentiment_label == "中性"
+    assert suggestion.sentiment_score == 45
+
+
 def test_uvicorn_serves_login_page_for_local_preview(monkeypatch, tmp_path):
     app_module = load_app(monkeypatch, tmp_path)
 

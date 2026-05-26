@@ -523,6 +523,8 @@ class CustomerScriptRequest(BaseModel):
 
 class CustomerScriptSuggestion(BaseModel):
     sentiment: str
+    sentiment_label: str
+    sentiment_score: int = Field(ge=0, le=100)
     reply: str
     steps: list[str]
     escalation: str
@@ -616,9 +618,36 @@ def _string_list(value: Any, fallback: list[str]) -> list[str]:
     return fallback
 
 
+def _clamp_score(value: Any, fallback: int) -> int:
+    try:
+        score = int(value)
+    except (TypeError, ValueError):
+        score = fallback
+    return max(0, min(100, score))
+
+
+def _sentiment_label_and_score(raw: dict[str, Any]) -> tuple[str, int]:
+    raw_label = str(raw.get("sentiment_label") or raw.get("sentiment") or "").strip()
+    text = raw_label.lower()
+    if any(word in text for word in ("高风险", "强烈", "愤怒", "angry", "severe", "high")):
+        label, fallback = "高风险负面", 88
+    elif any(word in text for word in ("负面", "投诉", "不满", "差评", "negative", "complaint")):
+        label, fallback = "偏负面", 72
+    elif any(word in text for word in ("neutral", "中性", "一般")):
+        label, fallback = "中性", 45
+    elif any(word in text for word in ("正向", "满意", "positive", "happy")):
+        label, fallback = "正向", 24
+    else:
+        label, fallback = raw_label or "需人工复核", 55
+    return label, _clamp_score(raw.get("sentiment_score"), fallback)
+
+
 def _normalize_customer_script_suggestion(raw: dict[str, Any]) -> CustomerScriptSuggestion:
+    sentiment_label, sentiment_score = _sentiment_label_and_score(raw)
     return CustomerScriptSuggestion(
         sentiment=str(raw.get("sentiment") or "需人工复核").strip(),
+        sentiment_label=sentiment_label,
+        sentiment_score=sentiment_score,
         reply=str(raw.get("reply") or "请先安抚客户情绪，并承诺核查后给出明确回访时间。").strip(),
         steps=_string_list(raw.get("steps"), ["确认问题", "表达歉意", "给出处理时限"]),
         escalation=str(raw.get("escalation") or "若客户持续强烈投诉，升级给主管处理。").strip(),
@@ -641,8 +670,10 @@ def request_deepseek_customer_script(intent: str, customer_message: str) -> Cust
                 "role": "system",
                 "content": (
                     "你是电商/物流客服质检专家。根据客户原话和客户意图，生成坐席可直接使用的中文话术。"
-                    "只输出 JSON 对象，不要输出 Markdown。字段必须包含：sentiment、reply、steps、"
-                    "escalation、forbidden_words。steps 和 forbidden_words 必须是字符串数组。"
+                    "只输出 JSON 对象，不要输出 Markdown。字段必须包含：sentiment、sentiment_label、"
+                    "sentiment_score、reply、steps、escalation、forbidden_words。"
+                    "sentiment_label 使用 正向/中性/偏负面/高风险负面 之一；sentiment_score 是 0-100 整数。"
+                    "steps 和 forbidden_words 必须是字符串数组。"
                     "话术要先安抚，再确认动作和时限，避免承诺无法兑现的赔付。"
                 ),
             },
@@ -829,6 +860,8 @@ def suggest_customer_script(
             detail=str(exc),
         ) from exc
 
+    if not isinstance(suggestion, CustomerScriptSuggestion):
+        suggestion = _normalize_customer_script_suggestion(suggestion)
     return CustomerScriptResponse(success=True, data=suggestion)
 
 
