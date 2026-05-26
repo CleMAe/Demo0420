@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 import re
@@ -37,7 +38,9 @@ DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.co
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 CUSTOMER_SCRIPT_PRODUCT_NAME = "客服话术优化"
 ENTERPRISE_GPT_PRODUCT_NAME = "企业 GPT 助手"
-EMPLOYEE_HANDBOOK_PATH = Path(__file__).resolve().parent / "员工手册.md"
+COMPLIANCE_PRODUCT_NAME = "合规审查 AI"
+EMPLOYEE_HANDBOOK_PATH = Path(__file__).resolve().parent / "docs" / "员工手册.md"
+COMPLIANCE_LIBRARY_PATH = Path(__file__).resolve().parent / "docs" / "compliance.md"
 PROJECT_ROOT = Path(__file__).resolve().parent
 FRONTEND_ASSETS = {
     "": "index.html",
@@ -610,6 +613,64 @@ class EnterpriseGptAskResponse(BaseModel):
     message: str = ""
 
 
+class ComplianceCategoryOut(BaseModel):
+    id: str
+    label: str
+    risky_count: int
+    safe_count: int
+
+
+class ComplianceSampleClauseOut(BaseModel):
+    clause_id: str
+    title: str
+    text: str
+
+
+class ComplianceSourcesData(BaseModel):
+    categories: list[ComplianceCategoryOut]
+    preset_samples: list[ComplianceSampleClauseOut]
+    library_available: bool
+    disclaimer: str
+
+
+class ComplianceSourcesResponse(BaseModel):
+    success: bool
+    data: ComplianceSourcesData | None = None
+    message: str = ""
+
+
+class ComplianceScanRequest(BaseModel):
+    product_id: int
+    category: str = Field(min_length=1, max_length=20)
+    clauses: list[str] = Field(min_length=1, max_length=20)
+
+
+class ComplianceScanResultOut(BaseModel):
+    input_text: str
+    matched_clause_id: str | None
+    matched_title: str | None
+    risk_level: str
+    risk_tags: list[str]
+    risk_summary: str
+    citation_title: str | None
+    citation_excerpt: str | None
+
+
+class ComplianceScanData(BaseModel):
+    category: str
+    results: list[ComplianceScanResultOut]
+    risky_count: int
+    safe_count: int
+    review_count: int
+    disclaimer: str
+
+
+class ComplianceScanResponse(BaseModel):
+    success: bool
+    data: ComplianceScanData | None = None
+    message: str = ""
+
+
 class DeepSeekConfigError(RuntimeError):
     """DeepSeek integration is not configured for this deployment."""
 
@@ -1000,6 +1061,298 @@ def build_enterprise_gpt_answer(
     )
 
 
+COMPLIANCE_CATEGORIES: list[tuple[str, str]] = [
+    ("contract", "合同"),
+    ("procurement", "采购"),
+    ("commitment", "对外承诺"),
+]
+
+COMPLIANCE_DEMO_CLAUSE_IDS: dict[str, list[str]] = {
+    "合同": ["合同-001", "合同-002", "合同-003"],
+    "采购": ["采购-001", "采购-002", "采购-003"],
+    "对外承诺": ["承诺-001", "承诺-002", "承诺-003"],
+}
+
+COMPLIANCE_DISCLAIMER = (
+    "本演示系统使用的合同、采购及承诺样例均为虚构模拟数据，不构成法律意见、"
+    "投资建议或商业决策依据；正式使用前须经法务及合规部门复核。"
+)
+
+COMPLIANCE_CLAUSE_BLOCK_RE = re.compile(
+    r"^#### ((?:合同|采购|承诺)-\d+) · (.+)\n"
+    r"\*\*风险标注：\*\* ([^\n]+)\n"
+    r"\*\*条款文本：\*\* ([^\n]+)",
+    re.MULTILINE,
+)
+
+
+@dataclass(frozen=True)
+class ComplianceClause:
+    clause_id: str
+    title: str
+    category: str
+    risk_level: str
+    risk_tags: list[str]
+    text: str
+
+
+def _compliance_category_from_clause_id(clause_id: str) -> str:
+    if clause_id.startswith("合同-"):
+        return "合同"
+    if clause_id.startswith("采购-"):
+        return "采购"
+    return "对外承诺"
+
+
+def _parse_compliance_risk_annotation(raw: str) -> tuple[str, list[str]]:
+    parts = [part.strip() for part in raw.split("·") if part.strip()]
+    if not parts:
+        return "待复核", []
+    risk_level = parts[0]
+    tags = parts[1:]
+    return risk_level, tags
+
+
+def _parse_compliance_library(text: str) -> list[ComplianceClause]:
+    clauses: list[ComplianceClause] = []
+    for match in COMPLIANCE_CLAUSE_BLOCK_RE.finditer(text):
+        clause_id, title, risk_raw, clause_text = match.groups()
+        risk_level, risk_tags = _parse_compliance_risk_annotation(risk_raw)
+        clauses.append(
+            ComplianceClause(
+                clause_id=clause_id.strip(),
+                title=title.strip(),
+                category=_compliance_category_from_clause_id(clause_id.strip()),
+                risk_level=risk_level,
+                risk_tags=risk_tags,
+                text=clause_text.strip(),
+            )
+        )
+    return clauses
+
+
+@lru_cache(maxsize=1)
+def _load_compliance_clauses() -> tuple[ComplianceClause, ...]:
+    if not COMPLIANCE_LIBRARY_PATH.is_file():
+        return ()
+    text = COMPLIANCE_LIBRARY_PATH.read_text(encoding="utf-8")
+    return tuple(_parse_compliance_library(text))
+
+
+def _normalize_clause_text(text: str) -> str:
+    cleaned = re.sub(r"\s+", "", (text or "").strip())
+    cleaned = re.sub(r"[，。；：、（）()「」\"'“”‘’\-\*]", "", cleaned)
+    return cleaned
+
+
+def _clause_overlap_score(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    if left in right or right in left:
+        return min(len(left), len(right)) / max(len(left), len(right))
+    left_chars = set(left)
+    right_chars = set(right)
+    if not left_chars or not right_chars:
+        return 0.0
+    return len(left_chars & right_chars) / len(left_chars | right_chars)
+
+
+def _match_compliance_clause(
+    input_text: str,
+    library: tuple[ComplianceClause, ...],
+    category: str,
+) -> ComplianceClause | None:
+    normalized_input = _normalize_clause_text(input_text)
+    if not normalized_input:
+        return None
+
+    candidates = [clause for clause in library if clause.category == category]
+    if not candidates:
+        return None
+
+    for clause in candidates:
+        if _normalize_clause_text(clause.text) == normalized_input:
+            return clause
+
+    best: ComplianceClause | None = None
+    best_score = 0.0
+    for clause in candidates:
+        score = _clause_overlap_score(normalized_input, _normalize_clause_text(clause.text))
+        if score > best_score:
+            best_score = score
+            best = clause
+
+    if best is not None and best_score >= 0.45:
+        return best
+    return None
+
+
+def _compliance_risk_summary(clause: ComplianceClause) -> str:
+    if clause.risk_level == "无风险":
+        primary = clause.risk_tags[0] if clause.risk_tags else "符合模板"
+        return f"{primary}：{clause.title}"
+    primary = clause.risk_tags[0] if clause.risk_tags else clause.risk_level
+    return f"{primary}：{clause.title}"
+
+
+def _compliance_citation(clause: ComplianceClause) -> tuple[str, str]:
+    tags = " · ".join(clause.risk_tags) if clause.risk_tags else clause.risk_level
+    excerpt = (
+        f"{clause.clause_id} · {clause.title}\n"
+        f"风险标注：{clause.risk_level} · {tags}\n"
+        f"条款文本：{clause.text}"
+    )
+    return f"引用 · compliance.md · {clause.clause_id}", excerpt
+
+
+def _compliance_category_counts(
+    library: tuple[ComplianceClause, ...],
+) -> dict[str, tuple[int, int]]:
+    counts: dict[str, tuple[int, int]] = {
+        label: (0, 0) for _, label in COMPLIANCE_CATEGORIES
+    }
+    for clause in library:
+        risky, safe = counts.get(clause.category, (0, 0))
+        if clause.risk_level == "无风险":
+            counts[clause.category] = (risky, safe + 1)
+        else:
+            counts[clause.category] = (risky + 1, safe)
+    return counts
+
+
+def _compliance_clause_map(
+    library: tuple[ComplianceClause, ...],
+) -> dict[str, ComplianceClause]:
+    return {clause.clause_id: clause for clause in library}
+
+
+def _compliance_preset_samples(
+    library: tuple[ComplianceClause, ...],
+    category: str,
+) -> list[ComplianceSampleClauseOut]:
+    clause_map = _compliance_clause_map(library)
+    samples: list[ComplianceSampleClauseOut] = []
+    for clause_id in COMPLIANCE_DEMO_CLAUSE_IDS.get(category, []):
+        clause = clause_map.get(clause_id)
+        if clause is None:
+            continue
+        samples.append(
+            ComplianceSampleClauseOut(
+                clause_id=clause.clause_id,
+                title=clause.title,
+                text=clause.text,
+            )
+        )
+    return samples
+
+
+def _require_compliance_product(
+    product_id: int,
+    user: dict[str, Any],
+) -> sqlite3.Row:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != COMPLIANCE_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="产品不存在或无权访问",
+        )
+    return row
+
+
+def build_compliance_sources(category: str | None = None) -> ComplianceSourcesData:
+    library = _load_compliance_clauses()
+    counts = _compliance_category_counts(library)
+    selected = (category or "合同").strip() or "合同"
+    if selected not in counts:
+        selected = "合同"
+    return ComplianceSourcesData(
+        categories=[
+            ComplianceCategoryOut(
+                id=category_id,
+                label=label,
+                risky_count=counts.get(label, (0, 0))[0],
+                safe_count=counts.get(label, (0, 0))[1],
+            )
+            for category_id, label in COMPLIANCE_CATEGORIES
+        ],
+        preset_samples=_compliance_preset_samples(library, selected),
+        library_available=bool(library),
+        disclaimer=COMPLIANCE_DISCLAIMER,
+    )
+
+
+def build_compliance_scan(
+    category: str,
+    clauses: list[str],
+) -> ComplianceScanData:
+    library = _load_compliance_clauses()
+    results: list[ComplianceScanResultOut] = []
+    risky_count = 0
+    safe_count = 0
+    review_count = 0
+
+    for raw_clause in clauses:
+        input_text = raw_clause.strip()
+        if not input_text:
+            continue
+        matched = _match_compliance_clause(input_text, library, category)
+        if matched is None:
+            review_count += 1
+            results.append(
+                ComplianceScanResultOut(
+                    input_text=input_text,
+                    matched_clause_id=None,
+                    matched_title=None,
+                    risk_level="待复核",
+                    risk_tags=["未命中条款库"],
+                    risk_summary="未在演示条款库中命中，建议人工复核",
+                    citation_title=None,
+                    citation_excerpt=None,
+                )
+            )
+            continue
+
+        citation_title, citation_excerpt = _compliance_citation(matched)
+        risk_summary = _compliance_risk_summary(matched)
+        if matched.risk_level == "无风险":
+            safe_count += 1
+        elif matched.risk_level == "有风险":
+            risky_count += 1
+        else:
+            review_count += 1
+
+        results.append(
+            ComplianceScanResultOut(
+                input_text=input_text,
+                matched_clause_id=matched.clause_id,
+                matched_title=matched.title,
+                risk_level=matched.risk_level,
+                risk_tags=list(matched.risk_tags),
+                risk_summary=risk_summary,
+                citation_title=citation_title,
+                citation_excerpt=citation_excerpt,
+            )
+        )
+
+    return ComplianceScanData(
+        category=category,
+        results=results,
+        risky_count=risky_count,
+        safe_count=safe_count,
+        review_count=review_count,
+        disclaimer=COMPLIANCE_DISCLAIMER,
+    )
+
+
 # -----------------------------------------------------------------------------
 # App
 # -----------------------------------------------------------------------------
@@ -1181,6 +1534,47 @@ def enterprise_gpt_ask(
         _visibility_role_label(user["role"]),
     )
     return EnterpriseGptAskResponse(success=True, data=answer)
+
+
+@app.post("/api/compliance/scan", response_model=ComplianceScanResponse)
+def compliance_scan(
+    body: ComplianceScanRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> ComplianceScanResponse:
+    _require_compliance_product(body.product_id, user)
+    if not COMPLIANCE_LIBRARY_PATH.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="合规条款库文件不可用",
+        )
+    category = body.category.strip()
+    allowed = {label for _, label in COMPLIANCE_CATEGORIES}
+    if category not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="条款类别无效",
+        )
+    clauses = [clause.strip() for clause in body.clauses if clause.strip()]
+    if not clauses:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="请至少提供一条待扫描条款",
+        )
+    data = build_compliance_scan(category, clauses)
+    return ComplianceScanResponse(success=True, data=data)
+
+
+@app.get("/api/compliance/sources", response_model=ComplianceSourcesResponse)
+def compliance_sources(
+    product_id: int,
+    category: str | None = None,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> ComplianceSourcesResponse:
+    _require_compliance_product(product_id, user)
+    return ComplianceSourcesResponse(
+        success=True,
+        data=build_compliance_sources(category),
+    )
 
 
 @app.get("/health")

@@ -29,6 +29,21 @@ def enterprise_gpt_product_id(client, headers):
     raise AssertionError("企业 GPT 助手 product not found")
 
 
+def test_employee_handbook_path_points_to_docs(monkeypatch, tmp_path):
+    app_module = load_app(monkeypatch, tmp_path)
+    assert app_module.EMPLOYEE_HANDBOOK_PATH.name == "员工手册.md"
+    assert app_module.EMPLOYEE_HANDBOOK_PATH.parent.name == "docs"
+    assert app_module.EMPLOYEE_HANDBOOK_PATH.is_file()
+
+
+def test_load_employee_handbook_from_docs(monkeypatch, tmp_path):
+    app_module = load_app(monkeypatch, tmp_path)
+    app_module._load_employee_handbook.cache_clear()
+    handbook = app_module._load_employee_handbook()
+    assert "3.2.1" in handbook
+    assert "带薪年假" in handbook
+
+
 def test_enterprise_gpt_sources(monkeypatch, tmp_path):
     app_module = load_app(monkeypatch, tmp_path)
 
@@ -44,6 +59,7 @@ def test_enterprise_gpt_sources(monkeypatch, tmp_path):
     body = response.json()
     assert body["success"] is True
     assert body["data"]["handbook_available"] is True
+    assert app_module.EMPLOYEE_HANDBOOK_PATH.is_file()
     assert len(body["data"]["sources"]) == 3
     assert "新员工如何申请年假？" in body["data"]["preset_questions"]
 
@@ -76,7 +92,11 @@ def test_enterprise_gpt_ask_leave_question(monkeypatch, tmp_path):
 
 def test_enterprise_gpt_ask_requires_handbook(monkeypatch, tmp_path):
     app_module = load_app(monkeypatch, tmp_path)
-    monkeypatch.setattr(app_module, "EMPLOYEE_HANDBOOK_PATH", tmp_path / "missing.md")
+    monkeypatch.setattr(
+        app_module,
+        "EMPLOYEE_HANDBOOK_PATH",
+        tmp_path / "docs" / "missing-handbook.md",
+    )
     app_module._load_employee_handbook.cache_clear()
 
     with TestClient(app_module.app) as client:

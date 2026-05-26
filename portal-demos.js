@@ -194,28 +194,269 @@
     });
   }
 
-  function demoCompliance(root) {
+  function demoCompliance(root, product) {
     root.innerHTML = shell("条款风险初筛", (
-      '<ul class="space-y-3 text-sm">' +
-      '<li class="rounded-xl border border-slate-200 bg-white p-3" data-clause="1">甲方可在<strong class="text-slate-900">不事先通知</strong>的情况下调整服务价格。</li>' +
-      '<li class="rounded-xl border border-slate-200 bg-white p-3" data-clause="2">乙方对因不可抗力造成的损失<strong class="text-slate-900">承担全部赔偿责任</strong>。</li>' +
-      '<li class="rounded-xl border border-slate-200 bg-white p-3" data-clause="3">争议提交<strong class="text-slate-900">甲方所在地</strong>法院专属管辖。</li>' +
-      "</ul>" +
-      '<button type="button" data-action="scan" class="mt-4 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-orange-600">' +
-      "运行模拟扫描" +
-      "</button>"
+      '<p class="text-sm leading-relaxed text-slate-600">' +
+      '对<strong class="text-slate-800">合同、采购与对外承诺</strong>类文档进行条款级扫描，' +
+      '提示偏离模板的表述与常见风险点。演示条款库来自 <code class="rounded bg-slate-100 px-1 text-xs">docs/compliance.md</code>，' +
+      '不替代律师结论，但可显著缩短初筛时间。' +
+      "</p>" +
+      '<div class="mt-4 flex flex-wrap gap-2 text-xs" data-slot="sources"></div>' +
+      '<div class="mt-4 grid gap-4 sm:grid-cols-2">' +
+      '<div><label class="text-xs font-medium text-slate-600">条款类别</label>' +
+      '<select data-field="category" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      "<option>合同</option>" +
+      "<option>采购</option>" +
+      "<option>对外承诺</option>" +
+      "</select></div>" +
+      '<div><label class="text-xs font-medium text-slate-600">扫描模式</label>' +
+      '<select data-field="mode" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      "<option>演示样例（3 条）</option>" +
+      "<option>自定义粘贴</option>" +
+      "</select></div></div>" +
+      '<div data-slot="samples" class="mt-4 space-y-3"></div>' +
+      '<div data-slot="custom" class="mt-4 hidden">' +
+      '<label class="text-xs font-medium text-slate-600">粘贴待扫描条款（每行一条）</label>' +
+      '<textarea data-field="custom-clauses" rows="5" class="mt-1 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed outline-none ring-orange-500/20 transition focus:border-orange-500 focus:ring-4"></textarea>' +
+      "</div>" +
+      '<button type="button" data-action="scan" class="mt-4 inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">' +
+      "运行条款扫描" +
+      "</button>" +
+      '<div data-slot="out" class="hidden rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm leading-relaxed text-slate-700"></div>' +
+      '<p data-slot="disclaimer" class="mt-3 text-xs leading-relaxed text-slate-500"></p>'
     ));
-    bind(root, "[data-action=\"scan\"]", "click", function () {
-      var items = root.querySelectorAll("[data-clause]");
-      items.forEach(function (li, i) {
-        var risks = ["偏离模板：单方调价权过宽", "权责不对等：不可抗力全赔", "管辖条款：需复核是否可接受"];
-        li.innerHTML =
-          li.textContent +
-          ' <span class="mt-2 inline-flex rounded-lg bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">' +
-          escapeHtml(risks[i]) +
-          "</span>";
-      });
+
+    function apiBase() {
+      if (!window.location.host) return "http://127.0.0.1";
+      return "";
+    }
+
+    var state = {
+      samples: [],
+      disclaimer: "本演示数据不构成法律意见，正式使用前须经法务及合规部门复核。"
+    };
+
+    function renderSourceTags(categories) {
+      var slot = root.querySelector("[data-slot=\"sources\"]");
+      if (!slot) return;
+      var list = Array.isArray(categories) ? categories : [];
+      if (!list.length) {
+        slot.innerHTML = '<span class="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600">条款库 · compliance.md</span>';
+        return;
+      }
+      slot.innerHTML = list.map(function (item) {
+        return (
+          '<span class="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600">' +
+          escapeHtml(item.label) + " · " + escapeHtml(String(item.risky_count)) + " 有风险 / " +
+          escapeHtml(String(item.safe_count)) + " 无风险" +
+          "</span>"
+        );
+      }).join("");
+    }
+
+    function renderSampleClauses() {
+      var slot = root.querySelector("[data-slot=\"samples\"]");
+      if (!slot) return;
+      if (!state.samples.length) {
+        slot.innerHTML = '<p class="text-xs text-slate-500">正在加载演示样例…</p>';
+        return;
+      }
+      slot.innerHTML = state.samples.map(function (item, index) {
+        return (
+          '<div class="rounded-xl border border-slate-200 bg-white p-3" data-sample-index="' + index + '">' +
+          '<p class="text-xs font-medium text-slate-500">' + escapeHtml(item.clause_id || ("样例-" + (index + 1))) +
+          " · " + escapeHtml(item.title || "待扫描条款") + "</p>" +
+          '<p class="mt-1 text-sm leading-relaxed text-slate-700">' + escapeHtml(item.text || "") + "</p>" +
+          "</div>"
+        );
+      }).join("");
+    }
+
+    function renderCitationPanel(label, body) {
+      return (
+        '<details class="mt-2 rounded-lg border border-amber-200 bg-amber-50/80">' +
+        '<summary class="cursor-pointer px-3 py-2 text-xs font-medium text-amber-900">' +
+        escapeHtml(label) +
+        "</summary>" +
+        '<pre class="whitespace-pre-wrap border-t border-amber-200/80 px-3 py-2 font-sans text-xs leading-relaxed text-amber-950">' +
+        escapeHtml(body) +
+        "</pre></details>"
+      );
+    }
+
+    function riskBadgeClass(level) {
+      if (level === "无风险") return "bg-emerald-50 text-emerald-700";
+      if (level === "待复核") return "bg-amber-50 text-amber-800";
+      return "bg-red-50 text-red-700";
+    }
+
+    function renderScanResults(data) {
+      var results = (data && data.results) || [];
+      var summary =
+        '<p class="font-medium text-slate-900">扫描摘要 · ' + escapeHtml(data.category || "") + "</p>" +
+        '<p class="mt-2 text-sm text-slate-600">有风险 ' + escapeHtml(String(data.risky_count || 0)) +
+        " 条 · 无风险 " + escapeHtml(String(data.safe_count || 0)) +
+        " 条 · 待复核 " + escapeHtml(String(data.review_count || 0)) + " 条</p>";
+
+      var items = results.map(function (item, index) {
+        var tags = Array.isArray(item.risk_tags) ? item.risk_tags : [];
+        var tagHtml = tags.map(function (tag) {
+          return '<span class="mr-1 inline-flex rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600">' +
+            escapeHtml(tag) + "</span>";
+        }).join("");
+        var citation = item.citation_title && item.citation_excerpt
+          ? renderCitationPanel(item.citation_title, item.citation_excerpt)
+          : "";
+        return (
+          '<div class="mt-3 rounded-xl border border-slate-200 bg-white p-3">' +
+          '<div class="flex flex-wrap items-center gap-2">' +
+          '<span class="text-xs font-medium text-slate-500">条款 ' + (index + 1) + "</span>" +
+          '<span class="inline-flex rounded-lg px-2 py-0.5 text-xs font-medium ' + riskBadgeClass(item.risk_level) + '">' +
+          escapeHtml(item.risk_level || "待复核") + "</span>" +
+          (item.matched_clause_id ? '<span class="text-xs text-slate-500">' + escapeHtml(item.matched_clause_id) + "</span>" : "") +
+          "</div>" +
+          '<p class="mt-2 text-sm leading-relaxed text-slate-700">' + escapeHtml(item.input_text || "") + "</p>" +
+          '<p class="mt-2 text-xs font-medium text-slate-600">' + escapeHtml(item.risk_summary || "") + "</p>" +
+          (tagHtml ? '<div class="mt-2">' + tagHtml + "</div>" : "") +
+          citation +
+          "</div>"
+        );
+      }).join("");
+
+      return summary + items +
+        '<p class="mt-4 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">' +
+        escapeHtml(data.disclaimer || state.disclaimer) +
+        "</p>";
+    }
+
+    function loadSources(category) {
+      var token = localStorage.getItem("portal_token");
+      var productId = product && product.id;
+      if (!token || !productId) {
+        renderSampleClauses();
+        return Promise.resolve();
+      }
+      var query = "?product_id=" + encodeURIComponent(productId) +
+        "&category=" + encodeURIComponent(category || "合同");
+      return fetch(apiBase() + "/api/compliance/sources" + query, {
+        headers: { "Authorization": "Bearer " + token }
+      })
+        .then(function (res) {
+          return res.json().then(function (body) {
+            if (!res.ok) throw new Error((body && body.detail) || "加载条款库失败");
+            return body;
+          });
+        })
+        .then(function (body) {
+          var data = body.data || {};
+          state.samples = data.preset_samples || [];
+          state.disclaimer = data.disclaimer || state.disclaimer;
+          renderSourceTags(data.categories || []);
+          renderSampleClauses();
+          var disclaimerEl = root.querySelector("[data-slot=\"disclaimer\"]");
+          if (disclaimerEl) disclaimerEl.textContent = state.disclaimer;
+        })
+        .catch(function () {
+          renderSourceTags([]);
+          state.samples = [
+            {
+              clause_id: "合同-001",
+              title: "单方调价权过宽",
+              text: "甲方可在不事先通知的情况下，根据市场情况单方面调整本协议项下全部服务价格，乙方不得以此为由拒绝继续履行或要求解除协议。"
+            },
+            {
+              clause_id: "合同-002",
+              title: "不可抗力责任不对等",
+              text: "因不可抗力导致本协议无法履行的，乙方对由此给甲方造成的全部直接及间接损失承担赔偿责任，甲方不承担任何补偿义务。"
+            },
+            {
+              clause_id: "合同-003",
+              title: "管辖条款单方指定",
+              text: "因本协议产生的任何争议，均应提交甲方注册地人民法院专属管辖，乙方放弃对管辖法院提出异议的权利。"
+            }
+          ];
+          renderSampleClauses();
+        });
+    }
+
+    function collectClauses() {
+      var modeEl = root.querySelector("[data-field=\"mode\"]");
+      var mode = modeEl ? modeEl.value : "演示样例（3 条）";
+      if (mode === "自定义粘贴") {
+        var textarea = root.querySelector("[data-field=\"custom-clauses\"]");
+        var raw = textarea ? textarea.value : "";
+        return raw.split(/\n+/).map(function (line) { return line.trim(); }).filter(Boolean);
+      }
+      return state.samples.map(function (item) { return item.text; }).filter(Boolean);
+    }
+
+    bind(root, "[data-field=\"category\"]", "change", function () {
+      var categoryEl = root.querySelector("[data-field=\"category\"]");
+      loadSources(categoryEl ? categoryEl.value : "合同");
     });
+
+    bind(root, "[data-field=\"mode\"]", "change", function () {
+      var modeEl = root.querySelector("[data-field=\"mode\"]");
+      var custom = root.querySelector("[data-slot=\"custom\"]");
+      var samples = root.querySelector("[data-slot=\"samples\"]");
+      var isCustom = modeEl && modeEl.value === "自定义粘贴";
+      if (custom) custom.classList.toggle("hidden", !isCustom);
+      if (samples) samples.classList.toggle("hidden", isCustom);
+    });
+
+    bind(root, "[data-action=\"scan\"]", "click", function () {
+      var out = root.querySelector("[data-slot=\"out\"]");
+      var btn = root.querySelector("[data-action=\"scan\"]");
+      var categoryEl = root.querySelector("[data-field=\"category\"]");
+      var token = localStorage.getItem("portal_token");
+      var clauses = collectClauses();
+      var category = categoryEl ? categoryEl.value : "合同";
+
+      out.classList.remove("hidden");
+      if (!clauses.length) {
+        out.innerHTML = '<p class="text-sm text-red-700">请先选择演示样例或粘贴待扫描条款。</p>';
+        return;
+      }
+      if (!token || !(product && product.id)) {
+        out.innerHTML = '<p class="text-sm text-red-700">未登录或缺少产品信息，无法调用扫描接口。</p>';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 扫描中";
+      out.innerHTML = '<p class="flex items-center gap-2 text-xs text-slate-500">' + spinHtml() + " 正在匹配 docs/compliance.md 条款库…</p>";
+
+      fetch(apiBase() + "/api/compliance/scan", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product_id: product.id,
+          category: category,
+          clauses: clauses
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (body) {
+            if (!res.ok) throw new Error((body && body.detail) || "扫描失败");
+            return body;
+          });
+        })
+        .then(function (body) {
+          out.innerHTML = renderScanResults(body.data || {});
+        })
+        .catch(function (ex) {
+          out.innerHTML = '<p class="text-sm text-red-700">' + escapeHtml(ex.message || "扫描失败，请稍后重试。") + "</p>";
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "运行条款扫描";
+        });
+    });
+
+    loadSources("合同");
   }
 
   function demoFinReport(root) {
