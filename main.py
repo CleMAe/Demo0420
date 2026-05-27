@@ -47,8 +47,10 @@ FRONTEND_ASSETS = {
     "index.html": "index.html",
     "login.html": "login.html",
     "detail.html": "detail.html",
+    "smart-office.html": "smart-office.html",
     "portal-brand.js": "portal-brand.js",
     "portal-demos.js": "portal-demos.js",
+    "smart-office.js": "smart-office.js",
 }
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
@@ -258,7 +260,7 @@ PRODUCTS_SEED: list[tuple[str, str, str, str | None, list[str], str | None, str,
     (
         "智能办公智能体",
         "多流程文档审查与办公协同",
-        "https://example.com/smart-office-agent",
+        "smart-office.html",
         "办公",
         ["ADMIN", "Director", "USER"],
         None,
@@ -438,6 +440,10 @@ def init_db() -> None:
             "UPDATE products SET url = ? WHERE name = ?",
             ("", "问数智能体"),
         )
+        conn.execute(
+            "UPDATE products SET url = ? WHERE name = ?",
+            ("smart-office.html", SMART_OFFICE_PRODUCT_NAME),
+        )
         _backfill_product_content(conn)
 
 
@@ -590,6 +596,13 @@ class SmartOfficeReviewResponse(BaseModel):
     success: bool
     data: SmartOfficeReviewResult | None = None
     message: str = ""
+
+
+class SmartOfficeConfigOut(BaseModel):
+    api_key_configured: bool
+    model: str
+    base_url: str
+    hint: str
 
 
 class DeepSeekConfigError(RuntimeError):
@@ -775,114 +788,103 @@ def request_deepseek_customer_script(intent: str, customer_message: str) -> Cust
     return _normalize_customer_script_suggestion(_json_object_from_text(content))
 
 
-def _content_has_any(content: str, keywords: list[str]) -> bool:
-    text = content.casefold()
-    return any(keyword.casefold() in text for keyword in keywords)
-
-
-def _risk_level_from_score(score: int) -> str:
-    if score >= 70:
-        return "高"
-    if score >= 45:
-        return "中"
-    return "低"
-
-
-def review_smart_office_document(scenario: str, content: str) -> SmartOfficeReviewResult:
-    scenario_label = SMART_OFFICE_SCENARIOS[scenario]
-    findings: list[str] = []
-    suggestions: list[str] = []
-    score = 28
-
-    if scenario == "expense":
-        if _content_has_any(content, ["超标", "超过标准", "超额", "超标准"]):
-            findings.append("差旅或招待费用存在超标迹象，需核对标准额度与审批权限")
-            score += 28
-        if _content_has_any(content, ["未填写", "缺少", "无说明", "招待对象", "事由"]):
-            findings.append("费用说明、招待对象或出差事由信息不完整")
-            score += 22
-        if _content_has_any(content, ["无发票", "缺发票", "未附发票", "发票缺失"]):
-            findings.append("报销凭证不完整，缺少有效发票或附件")
-            score += 24
-        elif _content_has_any(content, ["发票齐全", "发票齐全", "发票"]):
-            suggestions.append("发票材料较完整，可优先进入费用合规初审")
-        suggestions.extend(["核对费用标准、审批链与预算科目", "补充参与人员、招待对象与业务事由"])
-        next_step = (
-            "退回申请人补充材料后重新提交"
-            if findings
-            else "可提交财务初审并归档审批记录"
-        )
-        summary = (
-            "报销单据存在费用合规风险，建议补充说明并复核标准。"
-            if findings
-            else "报销单据整体合规性较好，可进入常规审批流程。"
-        )
-    elif scenario == "resume":
-        if _content_has_any(content, ["不匹配", "匹配度", "偏弱", "不足"]):
-            findings.append("候选人与岗位要求的匹配度存在明显差距")
-            score += 26
-        if _content_has_any(content, ["缺少", "无行业", "行业背景", "经验不足"]):
-            findings.append("目标行业或关键岗位经验不足，需重点面试验证")
-            score += 22
-        if _content_has_any(content, ["后端", "python", "java", "架构"]):
-            suggestions.append("核心技术栈经验较充分，可安排技术面试深挖项目细节")
-            score = max(score - 8, 20)
-        suggestions.extend(["对照 JD 核对年限、行业与核心技能", "对风险项安排结构化面试与背调"])
-        next_step = "建议进入业务面试并记录匹配度评分" if findings else "可进入 HR 初筛通过名单"
-        summary = (
-            "简历与岗位存在需重点核实的不匹配项。"
-            if findings
-            else "简历整体与岗位较匹配，可推进下一轮筛选。"
-        )
-    elif scenario == "tender":
-        if _content_has_any(content, ["相似", "雷同", "串标", "围标"]):
-            findings.append("招标文件与历史方案存在相似或围标风险信号")
-            score += 30
-        if _content_has_any(content, ["资质", "门槛", "排他"]):
-            findings.append("资质或评分条款可能限制竞争，需审查公平性")
-            score += 20
-        if _content_has_any(content, ["未发现", "相似度低", "18%"]):
-            suggestions.append("文本相似度较低，可继续常规采购流程")
-            score = max(score - 10, 20)
-        suggestions.extend(["比对历史中标文本与关键条款差异", "邀请采购与法务联合复核评分办法"])
-        next_step = "建议采购委员会复核后进入下一环节"
-        summary = (
-            "招标文件存在需关注的合规与公平性风险。"
-            if findings
-            else "招标文件未发现显著串标或排他风险。"
-        )
-    else:
-        if _content_has_any(content, ["责任上限", "赔偿", "违约责任", "付款周期"]):
-            findings.append("合同关键条款与标准模板存在偏离，需法务重点审查")
-            score += 26
-        if _content_has_any(content, ["不一致", "偏离", "补充协议"]):
-            findings.append("条款表述与集团模板不一致，可能引发履约争议")
-            score += 20
-        if _content_has_any(content, ["数据出境", "保密", "知识产权"]):
-            findings.append("数据合规或知识产权条款需专项评估")
-            score += 18
-        suggestions.extend(["对照标准合同模板逐条比对差异", "对高风险条款补充修订建议与谈判底线"])
-        next_step = "提交法务复核并记录谈判修改意见"
-        summary = (
-            "合同文本存在需法务介入的中高风险条款。"
-            if findings
-            else "合同条款整体可控，可进入标准法务流程。"
-        )
-
-    if not findings:
-        findings.append(f"{scenario_label}未发现显著规则命中项，建议按常规流程处理")
-        score = min(score, 40)
-    score = max(0, min(100, score))
-
+def _normalize_smart_office_review(raw: dict[str, Any], scenario: str) -> SmartOfficeReviewResult:
+    scenario_label = str(raw.get("scenario_label") or SMART_OFFICE_SCENARIOS.get(scenario, scenario)).strip()
+    risk_level = str(raw.get("risk_level") or "中").strip()
+    if risk_level not in ("低", "中", "高"):
+        risk_level = "中"
     return SmartOfficeReviewResult(
         scenario=scenario,
         scenario_label=scenario_label,
-        risk_level=_risk_level_from_score(score),
-        score=score,
-        summary=summary,
-        findings=findings,
-        suggestions=suggestions or [f"按{scenario_label}标准清单完成复核"],
-        next_step=next_step,
+        risk_level=risk_level,
+        score=_clamp_score(raw.get("score"), 55),
+        summary=str(raw.get("summary") or "审查完成，请结合业务规则复核。").strip(),
+        findings=_string_list(raw.get("findings"), ["未发现显著风险点，建议按常规流程处理"]),
+        suggestions=_string_list(raw.get("suggestions"), ["按标准清单完成复核并留存审批记录"]),
+        next_step=str(raw.get("next_step") or "提交相关负责人复核").strip(),
+    )
+
+
+def request_deepseek_smart_office_review(scenario: str, content: str) -> SmartOfficeReviewResult:
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not api_key:
+        raise DeepSeekConfigError("未配置 DeepSeek API Key")
+
+    scenario_label = SMART_OFFICE_SCENARIOS[scenario]
+    base_url = os.environ.get("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL).rstrip("/")
+    model = os.environ.get("DEEPSEEK_MODEL", DEEPSEEK_MODEL).strip() or DEEPSEEK_MODEL
+    timeout = float(os.environ.get("DEEPSEEK_TIMEOUT", "20"))
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是企业智能办公文档审查专家，覆盖报销单据、简历筛选、招标文件、合同审核。"
+                    "根据场景与待审查文本输出结构化审查结论。只输出 JSON 对象，不要 Markdown。"
+                    "字段必须包含：scenario_label、risk_level、score、summary、findings、suggestions、next_step。"
+                    "risk_level 只能是 低/中/高 之一；score 为 0-100 整数；findings 与 suggestions 为字符串数组。"
+                    "结论需可解释、可执行，避免空泛表述。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "scenario": scenario,
+                        "scenario_label": scenario_label,
+                        "content": content,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+        "temperature": 0.2,
+        "max_tokens": 900,
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")[:300]
+        raise DeepSeekResponseError(f"DeepSeek API 返回错误：{exc.code} {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise DeepSeekResponseError(f"DeepSeek API 请求失败：{exc.reason}") from exc
+    except TimeoutError as exc:
+        raise DeepSeekResponseError("DeepSeek API 请求超时") from exc
+
+    try:
+        data = json.loads(body)
+        llm_content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise DeepSeekResponseError("DeepSeek API 响应结构异常") from exc
+    return _normalize_smart_office_review(_json_object_from_text(llm_content), scenario)
+
+
+def smart_office_runtime_config() -> SmartOfficeConfigOut:
+    configured = bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
+    model = os.environ.get("DEEPSEEK_MODEL", DEEPSEEK_MODEL).strip() or DEEPSEEK_MODEL
+    base_url = os.environ.get("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL).rstrip("/")
+    hint = (
+        "已在服务端配置 DEEPSEEK_API_KEY，可直接发起大模型审查。"
+        if configured
+        else "未检测到 DEEPSEEK_API_KEY。请在项目根目录 .env 中配置后，执行 docker compose up 重启 API 服务。"
+    )
+    return SmartOfficeConfigOut(
+        api_key_configured=configured,
+        model=model,
+        base_url=base_url,
+        hint=hint,
     )
 
 
@@ -1031,6 +1033,14 @@ def suggest_customer_script(
     return CustomerScriptResponse(success=True, data=suggestion)
 
 
+@app.get("/api/smart-office/config", response_model=SmartOfficeConfigOut)
+def get_smart_office_config(
+    user: dict[str, Any] = Depends(get_current_user),
+) -> SmartOfficeConfigOut:
+    _ = user
+    return smart_office_runtime_config()
+
+
 @app.post("/api/smart-office/review", response_model=SmartOfficeReviewResponse)
 def review_smart_office(
     body: SmartOfficeReviewRequest,
@@ -1049,7 +1059,19 @@ def review_smart_office(
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
 
-    result = review_smart_office_document(body.scenario, body.content.strip())
+    try:
+        result = request_deepseek_smart_office_review(body.scenario, body.content.strip())
+    except DeepSeekConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except DeepSeekResponseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
     return SmartOfficeReviewResponse(success=True, data=result)
 
 
