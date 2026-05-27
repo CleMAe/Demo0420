@@ -42,6 +42,18 @@
     if (el) el.addEventListener(event, handler);
   }
 
+  function apiBase() {
+    if (!window.location.host) return "http://127.0.0.1";
+    return "";
+  }
+
+  function authHeaders(extra) {
+    var headers = extra || {};
+    var token = localStorage.getItem("portal_token");
+    if (token) headers.Authorization = "Bearer " + token;
+    return headers;
+  }
+
   // --- 按产品名称 ---
 
   function demoEnterpriseGpt(root) {
@@ -942,27 +954,116 @@
     recalc();
   }
 
-  function demoTrainBot(root) {
-    root.innerHTML = shell("销售陪练回合", (
-      '<div data-slot="chat" class="max-h-52 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">' +
-      '<p class="rounded-lg bg-white p-2 text-slate-700"><span class="text-xs text-slate-400">客户 · </span>你们比竞品贵 15%，凭什么？</p></div>' +
-      '<div class="mt-2 flex gap-2">' +
-      '<input type="text" data-field="reply" placeholder="输入你的回应…" ' +
-      'class="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm" />' +
-      '<button type="button" data-action="send" class="rounded-xl bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600">发送</button></div>' +
-      '<p data-slot="score" class="mt-2 hidden text-xs text-slate-600"></p>'
+  function demoTrainBot(root, product) {
+    var history = [];
+    var round = 0;
+    var opening = "你们比竞品贵 15%，凭什么？如果只能讲概念，我很难往下推进。";
+
+    root.innerHTML = shell("合规陪练舱", (
+      '<div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 mb-4">' +
+      "输入 <code class=\"rounded bg-white/70 px-1\">/end</code> 可结束演练并生成教练复盘。对话通过后端接口返回，便于统一权限与后续模型接入。" +
+      "</div>" +
+      '<div data-slot="chat" class="max-h-80 space-y-3 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"></div>' +
+      '<div class="mt-3 flex flex-col gap-2 sm:flex-row">' +
+      '<input type="text" data-field="reply" placeholder="输入你的回应…例如：我们先用 PoC 和合同指标验证效果" ' +
+      'class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-orange-500/20 transition focus:border-orange-500 focus:ring-4" />' +
+      '<button type="button" data-action="send" class="rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">发送</button>' +
+      '<button type="button" data-action="end" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">结束</button>' +
+      "</div>" +
+      '<div data-slot="coach" class="mt-3 hidden rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm leading-relaxed text-slate-700"></div>'
     ));
+
+    var chat = root.querySelector("[data-slot=\"chat\"]");
+    var input = root.querySelector("[data-field=\"reply\"]");
+    var send = root.querySelector("[data-action=\"send\"]");
+    var end = root.querySelector("[data-action=\"end\"]");
+    var coach = root.querySelector("[data-slot=\"coach\"]");
+
+    function append(role, text) {
+      var label = role === "user" ? "我" : role === "coach" ? "教练" : "李总";
+      var cls = role === "user" ? "bg-orange-50 text-slate-800" : role === "coach" ? "bg-emerald-50 text-slate-800" : "bg-white text-slate-700";
+      var align = role === "user" ? "ml-auto" : "";
+      chat.insertAdjacentHTML(
+        "beforeend",
+        '<p class="' + align + " max-w-[86%] rounded-lg p-2 shadow-sm " + cls + '">' +
+        '<span class="text-xs text-slate-400">' + label + " · </span>" +
+        escapeHtml(text).replace(/\n/g, "<br/>") +
+        "</p>"
+      );
+      chat.scrollTop = chat.scrollHeight;
+      history.push({ role: role === "user" ? "user" : "assistant", content: text });
+    }
+
+    function setBusy(busy) {
+      input.disabled = busy;
+      send.disabled = busy;
+      end.disabled = busy;
+      send.textContent = busy ? "生成中…" : "发送";
+    }
+
+    function showCoach(data) {
+      coach.classList.remove("hidden");
+      coach.innerHTML =
+        '<p class="mb-1 text-xs font-semibold text-emerald-700">AI 教练复盘</p>' +
+        '<div>' + escapeHtml(data.reply).replace(/\n/g, "<br/>") + "</div>";
+      input.disabled = true;
+      send.disabled = true;
+      end.disabled = true;
+    }
+
+    function sendMessage(text) {
+      var value = text.trim();
+      if (!value) return;
+      round += 1;
+      append("user", value);
+      input.value = "";
+      setBusy(true);
+      fetch(apiBase() + "/api/employee-training/respond", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          product_id: product && product.id,
+          user_message: value,
+          round: round,
+          history: history.slice(-12)
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error((data && data.detail) || "陪练接口调用失败");
+            return data;
+          });
+        })
+        .then(function (payload) {
+          var data = payload && payload.data;
+          if (!data) throw new Error("陪练响应为空");
+          if (data.phase === "report") {
+            append("coach", data.reply);
+            showCoach(data);
+          } else {
+            append("assistant", data.reply);
+          }
+        })
+        .catch(function (ex) {
+          append("coach", "接口暂不可用：" + (ex.message || "未知错误") + "。请确认已通过 Docker 服务地址访问并已登录。");
+        })
+        .finally(function () {
+          if (!input.disabled) setBusy(false);
+        });
+    }
+
+    append("assistant", opening);
     bind(root, "[data-action=\"send\"]", "click", function () {
-      var chat = root.querySelector("[data-slot=\"chat\"]");
-      var inp = root.querySelector("[data-field=\"reply\"]");
-      var v = inp.value.trim() || "（未输入，使用默认回应）";
-      chat.innerHTML +=
-        '<p class="rounded-lg bg-orange-50 p-2 text-slate-800"><span class="text-xs text-orange-600">坐席 · </span>' + escapeHtml(v) + "</p>" +
-        '<p class="rounded-lg bg-white p-2 text-slate-700"><span class="text-xs text-slate-400">教练 · </span>可补充价值锚点与风险共担条款，避免单纯降价（模拟）。</p>';
-      inp.value = "";
-      var sc = root.querySelector("[data-slot=\"score\"]");
-      sc.classList.remove("hidden");
-      sc.textContent = "本轮要点命中：共情 ✓  价值陈述 △  下一步承诺 ✓（模拟评分）";
+      sendMessage(input.value);
+    });
+    bind(root, "[data-action=\"end\"]", "click", function () {
+      sendMessage("/end");
+    });
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        sendMessage(input.value);
+      }
     });
   }
 

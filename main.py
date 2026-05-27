@@ -35,6 +35,7 @@ DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.co
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 CUSTOMER_SCRIPT_PRODUCT_NAME = "客服话术优化"
 CLINICAL_PATHWAY_PRODUCT_NAME = "临床路径建议引擎"
+EMPLOYEE_TRAINING_PRODUCT_NAME = "员工自助：培训陪练"
 PROJECT_ROOT = Path(__file__).resolve().parent
 FRONTEND_ASSETS = {
     "": "index.html",
@@ -563,6 +564,33 @@ class CustomerScriptResponse(BaseModel):
     message: str = ""
 
 
+class EmployeeTrainingTurn(BaseModel):
+    role: str = Field(min_length=1, max_length=20)
+    content: str = Field(min_length=1, max_length=800)
+
+
+class EmployeeTrainingRequest(BaseModel):
+    product_id: int
+    user_message: str = Field(min_length=1, max_length=800)
+    round: int = Field(default=0, ge=0, le=30)
+    history: list[EmployeeTrainingTurn] = Field(default_factory=list)
+
+
+class EmployeeTrainingReply(BaseModel):
+    phase: str
+    role: str
+    reply: str
+    score: int | None = None
+    signals: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+
+
+class EmployeeTrainingResponse(BaseModel):
+    success: bool
+    data: EmployeeTrainingReply | None = None
+    message: str = ""
+
+
 class ClinicalPathwayRequest(BaseModel):
     product_id: int
     condition: str = Field(min_length=1, max_length=40)
@@ -705,6 +733,84 @@ def _normalize_customer_script_suggestion(raw: dict[str, Any]) -> CustomerScript
         steps=_string_list(raw.get("steps"), ["确认问题", "表达歉意", "给出处理时限"]),
         escalation=str(raw.get("escalation") or "若客户持续强烈投诉，升级给主管处理。").strip(),
         forbidden_words=_string_list(raw.get("forbidden_words"), ["这不是我们的问题", "你自己看规则"]),
+    )
+
+
+def build_employee_training_reply(
+    user_message: str,
+    round_no: int,
+    history: list[EmployeeTrainingTurn],
+) -> EmployeeTrainingReply:
+    text = user_message.strip()
+    lower = text.lower()
+    history_text = " ".join(turn.content for turn in history[-8:])
+    combined = f"{history_text} {text}".lower()
+
+    compliance_ok = any(
+        word in combined
+        for word in ("合规", "合同", "书面", "不能", "无法承诺", "不私下", "poc", "正式流程")
+    )
+    value_signal = any(
+        word in combined
+        for word in ("价值", "roi", "tco", "案例", "数据", "sla", "运维", "风险共担")
+    )
+    price_only = any(word in combined for word in ("降价", "打折", "便宜", "回扣"))
+
+    if "/end" in lower:
+        score = 55
+        signals: list[str] = []
+        suggestions: list[str] = []
+        if value_signal:
+            score += 20
+            signals.append("使用价值锚点回应价格异议")
+        else:
+            suggestions.append("价格异议中补充 ROI/TCO、客户案例或 SLA 保障")
+        if compliance_ok:
+            score += 20
+            signals.append("明确拒绝私下承诺并回到正式流程")
+        else:
+            suggestions.append("遇到保底、回扣、口头承诺时先明确合规边界")
+        if price_only:
+            score -= 15
+            suggestions.append("避免把谈判带入单纯降价或回扣表达")
+        score = max(0, min(100, score))
+        risk = "绿灯" if compliance_ok else "红线高危"
+        reply = (
+            "### 演练结束！AI 教练复盘报告\n"
+            f"- 综合评分：{score} / 100\n"
+            f"- 合规风险：{risk}\n"
+            f"- 命中要点：{'、'.join(signals) if signals else '暂未识别到关键优势话术'}\n"
+            f"- 优化建议：{'；'.join(suggestions) if suggestions else '继续保持价值表达和合规边界'}\n"
+            "- 推荐话术：李总，效果我们建议通过正式 PoC 和合同条款验证，所有承诺都写入书面文件，"
+            "这既保护贵司权益，也保证双方合作边界清晰。"
+        )
+        return EmployeeTrainingReply(
+            phase="report",
+            role="coach",
+            reply=reply,
+            score=score,
+            signals=signals,
+            suggestions=suggestions,
+        )
+
+    if round_no <= 1:
+        reply = "你们方案听起来不错，但竞品报价比你们低 15%。如果你只能讲概念，我很难往下推进。"
+    elif not compliance_ok and any(word in combined for word in ("效果", "保证", "承诺", "保底", "kpi")):
+        reply = "那你私下给我保个底吧，效果达不到就全额退款，这个不用写合同里。你能不能点头？"
+    elif compliance_ok:
+        reply = "行，至少你没有乱承诺。那你把 PoC 验证范围、成功指标和合同条款边界整理出来，我再让团队评估。"
+    elif value_signal:
+        reply = "价值账我听懂了一点，但你还没解释清楚失败风险怎么兜底。别只讲好处，讲讲边界。"
+    else:
+        reply = "这回答还是偏虚。你得具体说清楚能省多少钱、怎么验证，以及哪些承诺不能做。"
+
+    suggestions = ["用客户业务指标表达价值", "把效果验证落到 PoC 或书面合同", "遇到私下承诺要明确拒绝"]
+    return EmployeeTrainingReply(
+        phase="roleplay",
+        role="customer",
+        reply=reply,
+        signals=[signal for signal, ok in (("价值锚点", value_signal), ("合规边界", compliance_ok)) if ok],
+        suggestions=suggestions,
     )
 
 
@@ -996,6 +1102,28 @@ def suggest_customer_script(
     if not isinstance(suggestion, CustomerScriptSuggestion):
         suggestion = _normalize_customer_script_suggestion(suggestion)
     return CustomerScriptResponse(success=True, data=suggestion)
+
+
+@app.post("/api/employee-training/respond", response_model=EmployeeTrainingResponse)
+def respond_employee_training(
+    body: EmployeeTrainingRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> EmployeeTrainingResponse:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (body.product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != EMPLOYEE_TRAINING_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+
+    reply = build_employee_training_reply(body.user_message, body.round, body.history)
+    return EmployeeTrainingResponse(success=True, data=reply)
 
 
 @app.post("/api/clinical-pathway/suggest", response_model=ClinicalPathwayResponse)
