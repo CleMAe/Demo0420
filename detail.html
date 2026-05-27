@@ -46,7 +46,7 @@
     </div>
   </main>
 
-  <script src="/portal-demos.js"></script>
+  <script src="portal-demos.js?v=20260526-docker-static"></script>
   <script>
     (function () {
       var token = localStorage.getItem('portal_token');
@@ -137,7 +137,7 @@
             if (window.PortalDemos && typeof window.PortalDemos.mount === 'function') {
               window.PortalDemos.mount(demoRoot, p);
             } else {
-              demoRoot.innerHTML = '';
+              demoRoot.innerHTML = '<div class="mt-10 rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-700">交互演示脚本未加载，请确认通过 Docker 服务地址打开页面并刷新重试。</div>';
             }
           }
           content.classList.remove('hidden');
@@ -149,6 +149,6 @@
         });
     })();
   </script>
-  <script src="/portal-brand.js"></script>
+  <script src="portal-brand.js?v=20260526-docker-static"></script>
 </body>
 </html>

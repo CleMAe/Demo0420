@@ -348,19 +348,239 @@
   }
 
   function demoMedImaging(root) {
-    root.innerHTML = shell("影像浏览与初筛（演示）", (
-      '<div class="relative aspect-video max-h-56 w-full overflow-hidden rounded-xl border border-slate-200 bg-gradient-to-br from-slate-800 to-slate-600">' +
-      '<div class="absolute inset-0 opacity-40" style="background-image:radial-gradient(circle at 30% 40%,#fff 0.5px,transparent 0.5px);background-size:8px 8px"></div>' +
-      '<button type="button" data-action="pin" class="absolute left-[38%] top-[42%] flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-orange-400 bg-orange-500/90 text-xs font-bold text-white shadow-lg">' +
-      "!" +
-      "</button>" +
-      '<p class="absolute bottom-2 left-2 rounded bg-black/50 px-2 py-1 text-xs text-white">DICOM 预览 · 模拟</p></div>' +
-      '<p data-slot="note" class="mt-3 text-xs text-slate-500">点击热点查看模拟提示（非诊断结论）。</p>'
-    ));
-    bind(root, "[data-action=\"pin\"]", "click", function () {
-      root.querySelector("[data-slot=\"note\"]").innerHTML =
-        '<span class="font-medium text-orange-700">初筛提示：</span>局部密度增高影，建议由执业医师结合病史进一步评估（模拟）。';
-    });
+    var cases = [
+      {
+        title: "胸部 CT · 肺窗复核",
+        patient: "模拟患者 A · 52 岁",
+        accession: "SIM-CT-0420-A",
+        modality: "CT",
+        body: "胸部",
+        triage: "中优先级",
+        triageCls: "border-amber-200 bg-amber-50 text-amber-800",
+        confidence: "0.78",
+        queue: "影像科待复核",
+        series: ["肺窗", "纵隔窗", "MIP"],
+        finding: "右上肺外周见磨玻璃密度候选区，边界较淡，建议结合薄层重建与既往片复核。",
+        action: "24 小时内完成放射科医师复核，必要时安排随访影像。",
+        impression: "右上肺磨玻璃密度影候选提示，建议结合薄层 CT 与既往片对比。",
+        scanStyle: "background:radial-gradient(ellipse at 50% 54%, rgba(226,232,240,.45) 0 18%, transparent 19%), radial-gradient(ellipse at 36% 52%, rgba(148,163,184,.35) 0 11%, transparent 12%), radial-gradient(ellipse at 64% 52%, rgba(148,163,184,.32) 0 11%, transparent 12%), linear-gradient(135deg,#0f172a,#334155);",
+        spots: [
+          {
+            label: "候选灶 A",
+            cls: "border-orange-400 bg-orange-500/10",
+            x: 62,
+            y: 38,
+            w: 16,
+            h: 18,
+            note: "右上肺外周磨玻璃影候选区，算法置信度 0.78。"
+          },
+          {
+            label: "对照区",
+            cls: "border-emerald-400 bg-emerald-500/10",
+            x: 35,
+            y: 48,
+            w: 15,
+            h: 16,
+            note: "左肺对照区未见明显异常候选框。"
+          }
+        ]
+      },
+      {
+        title: "头颅 MRI · 急诊筛查",
+        patient: "模拟患者 B · 67 岁",
+        accession: "SIM-MR-0420-B",
+        modality: "MRI",
+        body: "头颅",
+        triage: "高优先级",
+        triageCls: "border-red-200 bg-red-50 text-red-700",
+        confidence: "0.86",
+        queue: "急诊优先复核",
+        series: ["DWI", "FLAIR", "T2"],
+        finding: "左侧基底节区可疑高信号候选区，需结合临床症状与原始序列进一步判断。",
+        action: "建议急诊影像医师优先复核，并同步提示临床团队关注时间窗。",
+        impression: "左侧基底节区高信号候选提示，需排除急性缺血相关改变。",
+        scanStyle: "background:radial-gradient(ellipse at 49% 50%, rgba(226,232,240,.58) 0 24%, transparent 25%), radial-gradient(ellipse at 42% 48%, rgba(100,116,139,.65) 0 7%, transparent 8%), radial-gradient(ellipse at 58% 51%, rgba(148,163,184,.45) 0 8%, transparent 9%), linear-gradient(135deg,#111827,#475569);",
+        spots: [
+          {
+            label: "急性候选区",
+            cls: "border-red-400 bg-red-500/10",
+            x: 40,
+            y: 42,
+            w: 13,
+            h: 15,
+            note: "左侧基底节区高信号候选区，需优先人工复核。"
+          },
+          {
+            label: "脑室定位",
+            cls: "border-sky-300 bg-sky-500/10",
+            x: 55,
+            y: 48,
+            w: 10,
+            h: 12,
+            note: "解剖定位参考区，用于辅助阅片方向判断。"
+          }
+        ]
+      },
+      {
+        title: "膝关节 X 线 · 骨科初筛",
+        patient: "模拟患者 C · 41 岁",
+        accession: "SIM-XR-0420-C",
+        modality: "X-Ray",
+        body: "膝关节",
+        triage: "低优先级",
+        triageCls: "border-emerald-200 bg-emerald-50 text-emerald-700",
+        confidence: "0.64",
+        queue: "门诊常规复核",
+        series: ["正位", "侧位", "髌骨轴位"],
+        finding: "关节间隙轻度变窄候选提示，未见明确急性骨折候选框。",
+        action: "建议门诊常规复核，结合体格检查评估退变程度。",
+        impression: "膝关节退变候选提示，未见明确急性骨折候选框。",
+        scanStyle: "background:linear-gradient(90deg, transparent 0 39%, rgba(226,232,240,.72) 40% 45%, transparent 46% 54%, rgba(203,213,225,.74) 55% 61%, transparent 62%), radial-gradient(ellipse at 50% 62%, rgba(148,163,184,.48) 0 18%, transparent 19%), linear-gradient(135deg,#1f2937,#64748b);",
+        spots: [
+          {
+            label: "关节间隙",
+            cls: "border-amber-300 bg-amber-500/10",
+            x: 43,
+            y: 56,
+            w: 20,
+            h: 10,
+            note: "关节间隙轻度变窄候选提示，建议结合临床症状复核。"
+          },
+          {
+            label: "骨皮质",
+            cls: "border-emerald-400 bg-emerald-500/10",
+            x: 34,
+            y: 29,
+            w: 12,
+            h: 22,
+            note: "骨皮质连续性候选检查未提示明确急性骨折。"
+          }
+        ]
+      }
+    ];
+    var current = 0;
+    var activeSpot = 0;
+    var seriesIndex = 0;
+    var reviewed = {};
+    var reportReady = {};
+
+    function render() {
+      var item = cases[current];
+      var spot = item.spots[activeSpot] || item.spots[0];
+      var confPct = Math.round(Number(item.confidence) * 100);
+      var reportHtml = reportReady[current] ? (
+        '<div class="mt-3 space-y-2 rounded-xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600">' +
+        '<p><span class="font-medium text-slate-900">检查号：</span>' + escapeHtml(item.accession) + '</p>' +
+        '<p><span class="font-medium text-slate-900">影像所见：</span>' + escapeHtml(item.finding) + '</p>' +
+        '<p><span class="font-medium text-slate-900">初筛印象：</span>' + escapeHtml(item.impression) + '</p>' +
+        '<p><span class="font-medium text-slate-900">建议：</span>' + escapeHtml(item.action) + '</p>' +
+        '<p class="border-t border-slate-100 pt-2 text-red-600">AI 草稿仅用于演示，需放射科医师签发后才可进入正式报告。</p>' +
+        '</div>'
+      ) : (
+        '<p class="mt-3 text-xs leading-relaxed text-slate-500">生成后展示结构化报告草稿：检查号、影像所见、初筛印象、建议和免责声明。</p>'
+      );
+      root.innerHTML = shell("医疗影像初筛工作台", (
+        '<div class="grid gap-4 lg:grid-cols-5">' +
+        '<div class="space-y-3 lg:col-span-3">' +
+        '<div class="relative aspect-video max-h-80 w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-900 shadow-inner" style="' + item.scanStyle + '">' +
+        '<div class="absolute inset-0 opacity-25" style="background-image:linear-gradient(rgba(255,255,255,.14) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.1) 1px, transparent 1px);background-size:22px 22px"></div>' +
+        '<div class="absolute left-3 top-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs font-medium text-white">' + escapeHtml(item.modality) + " · " + escapeHtml(item.series[seriesIndex]) + '</div>' +
+        '<div class="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs text-white">DICOM Preview · 模拟影像</div>' +
+        item.spots.map(function (s, i) {
+          var active = i === activeSpot ? " ring-4 ring-white/50" : " opacity-75 hover:opacity-100";
+          return (
+            '<button type="button" data-spot="' + i + '" aria-label="' + escapeHtml(s.label) + '" ' +
+            'class="absolute rounded-lg border-2 shadow-lg transition ' + s.cls + active + '" ' +
+            'style="left:' + s.x + '%;top:' + s.y + '%;width:' + s.w + '%;height:' + s.h + '%;transform:translate(-50%,-50%)"></button>'
+          );
+        }).join("") +
+        '</div>' +
+        '<div class="grid gap-2 sm:grid-cols-3">' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-400">模态</p><p class="mt-1 text-sm font-semibold text-slate-900">' + escapeHtml(item.modality) + '</p></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-400">部位</p><p class="mt-1 text-sm font-semibold text-slate-900">' + escapeHtml(item.body) + '</p></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-400">置信度</p><p class="mt-1 text-sm font-semibold text-slate-900">' + escapeHtml(item.confidence) + '</p><div class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100"><span class="block h-full rounded-full bg-orange-500" style="width:' + confPct + '%"></span></div></div>' +
+        '</div>' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+        '<div class="flex flex-wrap items-center justify-between gap-2"><p class="text-sm font-semibold text-slate-900">质控清单</p><span class="text-xs text-slate-400">' + escapeHtml(item.accession) + '</span></div>' +
+        '<div class="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">' +
+        '<p class="rounded-lg bg-emerald-50 px-2.5 py-2 text-emerald-700">已脱敏模拟病例</p>' +
+        '<p class="rounded-lg bg-emerald-50 px-2.5 py-2 text-emerald-700">影像质量可读</p>' +
+        '<p class="rounded-lg bg-emerald-50 px-2.5 py-2 text-emerald-700">候选框可定位</p>' +
+        '<p class="rounded-lg px-2.5 py-2 ' + (reviewed[current] ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700") + '">' + (reviewed[current] ? "人工复核已记录" : "等待人工复核") + '</p>' +
+        '</div></div></div>' +
+        '<div class="space-y-4 lg:col-span-2">' +
+        '<label class="block text-xs font-medium text-slate-600">模拟病例</label>' +
+        '<select data-field="case" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-orange-500/20 focus:border-orange-500 focus:ring-4">' +
+        cases.map(function (c, i) {
+          return '<option value="' + i + '"' + (i === current ? " selected" : "") + ">" + escapeHtml(c.title) + "</option>";
+        }).join("") +
+        '</select>' +
+        '<div><p class="mb-2 text-xs font-medium text-slate-600">阅片序列</p><div class="flex flex-wrap gap-2">' +
+        item.series.map(function (name, i) {
+          var cls = i === seriesIndex ? "border-orange-500 bg-orange-50 text-orange-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50";
+          return '<button type="button" data-series="' + i + '" class="rounded-lg border px-3 py-1.5 text-xs font-medium transition ' + cls + '">' + escapeHtml(name) + "</button>";
+        }).join("") +
+        '</div></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+        '<div class="flex flex-wrap items-center justify-between gap-2">' +
+        '<p class="text-sm font-semibold text-slate-900">' + escapeHtml(item.patient) + '</p>' +
+        '<span class="rounded-lg border px-2.5 py-1 text-xs font-medium ' + item.triageCls + '">' + escapeHtml(item.triage) + '</span>' +
+        '</div>' +
+        '<div class="mt-3 space-y-2 text-sm leading-relaxed text-slate-600">' +
+        '<p><span class="font-medium text-slate-900">队列状态：</span>' + escapeHtml(item.queue) + '</p>' +
+        '<p><span class="font-medium text-slate-900">当前标注：</span>' + escapeHtml(spot.label) + '</p>' +
+        '<p>' + escapeHtml(spot.note) + '</p>' +
+        '<p class="border-t border-slate-100 pt-2"><span class="font-medium text-slate-900">初筛摘要：</span>' + escapeHtml(item.finding) + '</p>' +
+        '</div></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-relaxed text-slate-600">' +
+        '<p class="font-medium text-slate-900">复核建议</p>' +
+        '<p class="mt-2">' + escapeHtml(item.action) + '</p>' +
+        '<p data-slot="review-note" class="mt-3 text-xs text-slate-500">' + (reviewed[current] ? "已记录：等待放射科医师复核。" : "待处理：尚未记录人工复核。") + '</p>' +
+        '<button type="button" data-action="review" class="mt-3 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600">' +
+        (reviewed[current] ? "更新复核记录" : "标记待医师复核") +
+        '</button></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4">' +
+        '<div class="flex flex-wrap items-center justify-between gap-2"><p class="text-sm font-semibold text-slate-900">结构化报告草稿</p><span class="rounded-lg bg-slate-200 px-2 py-0.5 text-xs text-slate-600">模拟</span></div>' +
+        '<button type="button" data-action="report" class="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50">' +
+        (reportReady[current] ? "刷新报告草稿" : "生成报告草稿") +
+        '</button>' +
+        reportHtml +
+        '</div>' +
+        '<p class="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-700">演示数据不构成医疗诊断，所有候选提示均需执业医师结合完整病史和原始影像复核。</p>' +
+        '</div></div>'
+      ));
+
+      bind(root, "[data-field=\"case\"]", "change", function (ev) {
+        current = Number(ev.target.value) || 0;
+        activeSpot = 0;
+        seriesIndex = 0;
+        render();
+      });
+      root.querySelectorAll("[data-series]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          seriesIndex = Number(btn.getAttribute("data-series")) || 0;
+          render();
+        });
+      });
+      root.querySelectorAll("[data-spot]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          activeSpot = Number(btn.getAttribute("data-spot")) || 0;
+          render();
+        });
+      });
+      bind(root, "[data-action=\"review\"]", "click", function () {
+        reviewed[current] = true;
+        var note = root.querySelector("[data-slot=\"review-note\"]");
+        if (note) note.textContent = "已记录：等待放射科医师复核。";
+        render();
+      });
+      bind(root, "[data-action=\"report\"]", "click", function () {
+        reportReady[current] = true;
+        render();
+      });
+    }
+
+    render();
   }
 
   function demoClinicalPath(root, product) {
@@ -872,24 +1092,343 @@
   }
 
   function demoLongContextQa(root) {
+    var DOCS = {
+      "服务合同": {
+        title: "技术服务协议（模拟）",
+        chapters: [
+          { id: "art1", label: "第 1 条  定义与解释", text: "本协议中「服务」指乙方按照附件 A 所列技术规格提供的软件开发与运维支持。「交付物」包括源代码、编译产物、接口文档与部署说明。术语若无特别定义，则按照行业惯例解释。双方确认已充分理解并同意各条款含义。" },
+          { id: "art2", label: "第 2 条  服务范围", text: "乙方应在项目启动后 90 日内完成核心模块开发并通过验收测试。服务范围包含需求分析、架构设计、编码实现、单元测试与集成测试。超出附件 A 范围的新增需求须另行签署补充协议并按人天报价。" },
+          { id: "art3", label: "第 3 条  服务期限", text: "本协议自双方签署之日起生效，初始服务期为 24 个月。服务期届满前 60 日，任何一方均可书面提出续约意向，双方协商一致后签署续约协议。若未达成续约，协议到期自动终止。" },
+          { id: "art4", label: "第 4 条  费用与结算", text: "项目总费用为人民币伍拾万元整，分四期支付：签约后 7 日内支付 30%，核心模块验收后支付 30%，整体验收后支付 30%，质保期满后支付 10%。每期付款前乙方应开具等额增值税专用发票。" },
+          { id: "art5", label: "第 5 条  交付与验收", text: "乙方应在各里程碑节点提交交付物与测试报告。甲方应在收到交付物后 10 个工作日内完成验收或提出书面整改意见。逾期未提出视为验收通过。整改完成后重新进入验收流程。" },
+          { id: "art6", label: "第 6 条  知识产权", text: "乙方为履行本协议所创作的代码、文档等知识产权在甲方付清全部费用后转让给甲方。乙方保留其通用工具、框架和预置组件的所有权，甲方获得不可撤销的永久使用许可。" },
+          { id: "art7", label: "第 7 条  保密义务", text: "双方对在履行协议过程中获知的对方商业秘密、技术信息和客户数据承担保密义务。保密期限自获知之日起至信息公开后 3 年止。违反保密义务的一方应赔偿对方因此遭受的全部损失。" },
+          { id: "art8", label: "第 8 条  数据安全", text: "乙方处理甲方数据时应遵守适用法律和附件 B 数据处理协议（DPA）。数据存储须位于中国境内服务器。乙方不得将数据用于协议约定之外的任何目的，并在协议终止后 30 日内删除或返还所有数据。" },
+          { id: "art9", label: "第 9 条  质量保证", text: "乙方承诺交付的软件符合附件 A 所列功能规格与性能指标。验收通过后提供 12 个月免费质保，质保期内对程序错误提供免费修复。人为误操作、第三方组件固有缺陷不在质保范围内。" },
+          { id: "art10", label: "第 10 条  违约责任", text: "任何一方违反协议条款给对方造成损失的，应承担赔偿责任。乙方延期交付超过 30 日的，每逾期一日按未交付部分对应金额的 0.05% 支付违约金。违约金总额累计不超过协议总金额的 20%。" },
+          { id: "art11", label: "第 11 条  不可抗力", text: "因地震、洪水、疫情、战争或政府禁令等不可抗力导致无法履约的，受影响方应在 7 日内书面通知对方并提供证明。双方协商延期或终止协议，互不承担违约责任。" },
+          { id: "art12", label: "第 12 条  协议终止", text: "任何一方提前 30 日书面通知可终止本协议，终止前已产生的费用仍应结算。一方严重违约且收到书面催告后 15 日内未纠正的，守约方可单方解除协议并要求赔偿。协议终止不影响已产生的权利义务。" },
+          { id: "art13", label: "第 13 条  争议解决", text: "因本协议产生的争议，双方应首先友好协商。协商不成的，提交北京仲裁委员会按其仲裁规则进行仲裁。仲裁裁决为终局的，对双方均有约束力。" }
+        ]
+      },
+      "制度手册": {
+        title: "员工考勤与假期管理制度（模拟）",
+        chapters: [
+          { id: "sec1", label: "第 1 章  总则", text: "本制度依据《劳动法》及公司规章制度制定，适用于全体员工。制度旨在规范考勤管理、保障员工休息休假权利、维护正常生产经营秩序。各部门应严格执行并于每月 5 日前提交上月考勤汇总。" },
+          { id: "sec2", label: "第 2 章  工作时间", text: "公司实行标准工时制，每周工作 5 天，每日工作 8 小时。核心工作时间为 9:00—18:00，含午休 12:00—13:00。特殊岗位可申请弹性工作制，经部门负责人和 HR 审批后执行。研发岗位默认弹性上下班。" },
+          { id: "sec3", label: "第 3 章  年假管理", text: "累计工作满 1 年不满 10 年的，年假 5 天；满 10 年不满 20 年的，年假 10 天；满 20 年的，年假 15 天。年假按自然年度计算，须在次年 3 月底前休完。申请年假需提前 3 日在 OA 提交，经直属主管审批。" },
+          { id: "sec4", label: "第 4 章  病假与事假", text: "病假凭二级以上医院证明申请，3 天以内由主管审批，超过 3 天由 HR 审批。病假期间工资按国家规定发放。事假须提前申请，全年累计不超过 15 天，事假期间无薪。" },
+          { id: "sec5", label: "第 5 章  加班管理", text: "工作日加班按 1.5 倍计算加班费或调休，休息日加班按 2 倍计算，法定节假日加班按 3 倍计算。加班须事先经主管审批同意，未经审批的加班不计入考勤。优先安排调休，调休不得跨年使用。各部门严格控制加班时长，月人均加班不超过 36 小时。" },
+          { id: "sec6", label: "第 6 章  婚假与产假", text: "员工结婚享受婚假 3 天，晚婚（男 25 岁、女 23 岁以上）增加 7 天。女员工产假 98 天（含产前 15 天），难产增加 15 天，多胞胎每多一胎增加 15 天。男员工陪产假 15 天。须提前 30 日凭有效证明申请。" },
+          { id: "sec7", label: "第 7 章  迟到与旷工", text: "迟到超过 30 分钟计旷工半天。月累计迟到 3 次以上记书面警告。连续旷工 3 天或年累计旷工 7 天以上的，公司有权解除劳动合同。考勤异常应在 2 日内通过 OA 补办手续。" },
+          { id: "sec8", label: "第 8 章  附则", text: "本制度由人力资源部负责解释和修订。制度如有更新以最新版本为准，更新后通过公司内网公告。本制度自发布之日起施行，原有考勤规定同时废止。" }
+        ]
+      },
+      "行业研报": {
+        title: "新能源行业季度景气报告（模拟）",
+        chapters: [
+          { id: "rep1", label: "一、宏观环境", text: "本季度国内 GDP 增速环比回升至 5.2%，制造业 PMI 连续三个月位于扩张区间。新能源汽车购置税减免政策延续至 2027 年底，储能补贴试点城市扩至 30 个。欧盟碳关税过渡期启动，对出口企业碳足迹核算提出新要求。" },
+          { id: "rep2", label: "二、产业链分析", text: "上游锂电材料价格经历连续 6 个月下行后企稳，碳酸锂均价回落至 12 万元/吨。中游电池厂商产能利用率回升至 78%，头部企业毛利率改善 3—5 个百分点。下游整车端价格竞争加剧，渗透率突破 45%。" },
+          { id: "rep3", label: "三、竞争格局", text: "行业集中度 CR5 约 58%，较去年同期提升 5 个百分点。龙头企业通过垂直整合与规模效应持续挤压中小厂商。二线企业聚焦细分市场如换电重卡、储能系统寻求差异化突围。外资品牌在华份额下滑至 12%。" },
+          { id: "rep4", label: "四、技术趋势", text: "固态电池研发加速，半固态产品预计 2026 年下半年量产装车。800V 高压平台渗透率快速提升，推动碳化硅功率器件需求增长。钠离子电池储能项目落地加速，成本优势在储能场景逐步显现。" },
+          { id: "rep5", label: "五、投资建议", text: "维持行业标配评级。锂电材料环节库存去化接近尾声，关注龙头企业估值修复机会。整车环节竞争烈度上行，优选有海外市场拓展能力与成本控制优势的公司。储能赛道景气度持续，设备与集成商值得关注。" },
+          { id: "rep6", label: "六、风险提示", text: "产能过剩风险从材料向电芯环节传导，行业平均毛利率有持续下行压力。海外贸易壁垒升级可能影响出口业务。锂资源进口依赖度仍高，地缘政治扰动构成供应链风险。终端需求增速放缓可能引发新一轮价格战。" }
+        ]
+      },
+      "技术白皮书": {
+        title: "零信任安全架构白皮书（模拟）",
+        chapters: [
+          { id: "zt1", label: "1. 概述", text: "零信任（Zero Trust）是一种以「永不信任，始终验证」为核心原则的网络安全模型。与传统边界安全模型不同，零信任假定网络始终处于被攻陷状态，不对任何用户、设备或流量给予隐式信任。本白皮书阐述企业落地零信任架构的核心理念、技术组件与实施路径。" },
+          { id: "zt2", label: "2. 核心理念", text: "零信任建立在三个核心原则上：一是显式验证，始终基于所有可用数据点进行身份认证与授权；二是最小权限，仅授予用户完成当前任务所需的最少访问权限；三是假定入侵，对每一次访问请求都当作来自被攻陷的网络来处理，做最小化爆炸半径的设计。" },
+          { id: "zt3", label: "3. 身份与访问管理", text: "采用多因素认证（MFA）作为基础身份验证手段，结合生物特征、硬件令牌等增强认证强度。权限管理采用基于角色的访问控制（RBAC）与基于属性的访问控制（ABAC）结合，实现动态细粒度授权。建议与现有 LDAP/AD 和 IAM 系统集成。" },
+          { id: "zt4", label: "4. 微隔离技术", text: "通过软件定义边界（SDP）在工作负载之间建立细粒度隔离策略，使攻击者在获得单一主机访问权限后无法横向移动。微隔离策略可基于标签（如环境、应用、合规等级）自动生成，并通过策略即代码方式纳入 CI/CD 流水线管理。" },
+          { id: "zt5", label: "5. 持续监控与分析", text: "部署统一的遥测数据采集平台，收集网络流量、终端行为、身份认证和 API 调用日志。通过 UEBA（用户实体行为分析）和机器学习模型识别异常行为模式。建立 SOAR（安全编排自动化与响应）剧本，对高风险事件触发自动隔离、强制重认证等措施。" },
+          { id: "zt6", label: "6. 数据安全", text: "零信任架构下的数据保护采用分类分级、加密与访问控制三层防护。敏感数据强制启用透明数据加密（TDE），传输过程使用 TLS 1.3，密钥管理通过硬件安全模块（HSM）集中托管。数据访问日志记录所有读取、修改和导出操作，满足审计与合规要求。" },
+          { id: "zt7", label: "7. 实施路径建议", text: "建议采用分阶段渐进式路径：第一阶段梳理资产与敏感数据全貌，部署 MFA 与设备合规检查；第二阶段实施应用层微隔离，替代传统 VPN 访问；第三阶段引入 UEBA 分析能力，打通 SIEM/SOAR 联动；第四阶段实现自适应访问控制与策略自动化。" },
+          { id: "zt8", label: "8. 常见误区与应对", text: "误区一：认为零信任就是单一产品。实际上零信任是体系化架构，需身份、设备、网络、数据多层面协同。误区二：一次性全量部署。应基于风险评估分批次推进，从最敏感的资产开始。误区三：忽视用户体验。策略过度收紧将降低生产力，需在安全与易用间取得平衡。" }
+        ]
+      }
+    };
+
+    var QA_PRESETS = {
+      "服务合同": [
+        { kw: ["终止", "提前", "通知", "解除"], answer: "根据<strong class=\"text-orange-600\">第 12 条</strong>，任何一方提前<strong>至少 30 日书面通知</strong>可终止本协议，终止前已产生的费用仍应结算。若一方严重违约且收到催告后<strong>15 日内未纠正</strong>，守约方可单方解除协议。", ref: { id: "art12", label: "第 12 条  协议终止" } },
+        { kw: ["保密", "数据", "信息", "商业秘密"], answer: "根据<strong class=\"text-orange-600\">第 7 条</strong>和第<strong class=\"text-orange-600\">8 条</strong>，双方承担保密义务，保密期限至信息公开后 <strong>3 年</strong>。数据处理须遵守 DPA 附件 B，存储在中国境内，协议终止后 <strong>30 日内</strong>删除或返还数据。", ref: { id: "art7", label: "第 7 条  保密义务" } },
+        { kw: ["费用", "支付", "结算", "金额", "多少钱"], answer: "根据<strong class=\"text-orange-600\">第 4 条</strong>，项目总费用为<strong>人民币伍拾万元整</strong>，分四期支付：签约后付 <strong>30%</strong>、核心验收后付 30%、整体验收后付 30%、质保期满后付 10%。每期付款前乙方应开具等额增值税专用发票。", ref: { id: "art4", label: "第 4 条  费用与结算" } },
+        { kw: ["违约", "赔偿", "延期", "违约金"], answer: "根据<strong class=\"text-orange-600\">第 10 条</strong>，乙方延期交付超过 <strong>30 日</strong>的，每逾期一日按未交付部分 <strong>0.05%</strong> 支付违约金，累计上限不超过协议总额的 <strong>20%</strong>。任何违约方应赔偿对方实际损失。", ref: { id: "art10", label: "第 10 条  违约责任" } },
+        { kw: ["知识产权", "代码", "归属", "专利", "著作权"], answer: "根据<strong class=\"text-orange-600\">第 6 条</strong>，甲方付清全部费用后获得代码和文档的知识产权。乙方保留通用工具和预置组件的所有权，甲方获得<strong>不可撤销的永久使用许可</strong>。", ref: { id: "art6", label: "第 6 条  知识产权" } },
+        { kw: ["质量", "保证", "质保", "bug", "缺陷", "维护"], answer: "根据<strong class=\"text-orange-600\">第 9 条</strong>，验收通过后提供 <strong>12 个月免费质保</strong>，对程序错误提供免费修复。人为误操作和第三方组件固有缺陷不在质保范围内。", ref: { id: "art9", label: "第 9 条  质量保证" } }
+      ],
+      "制度手册": [
+        { kw: ["年假", "请假", "休假", "假期"], answer: "根据<strong class=\"text-orange-600\">第 3 章</strong>，累计工作满 1 年不满 10 年的年假 <strong>5 天</strong>，满 10 年不满 20 年的年假 <strong>10 天</strong>，满 20 年的年假 <strong>15 天</strong>。须在次年 <strong>3 月底前</strong>休完，申请需提前 <strong>3 日</strong>在 OA 提交并获直属主管审批。", ref: { id: "sec3", label: "第 3 章  年假管理" } },
+        { kw: ["加班", "调休", "加班费", "工时"], answer: "根据<strong class=\"text-orange-600\">第 5 章</strong>，工作日加班按 <strong>1.5 倍</strong>，休息日按 <strong>2 倍</strong>，法定节假日按 <strong>3 倍</strong>。优先安排调休（不可跨年），月人均加班不超过 <strong>36 小时</strong>。加班须事先经主管审批。", ref: { id: "sec5", label: "第 5 章  加班管理" } },
+        { kw: ["病假", "事假", "医疗", "证明"], answer: "根据<strong class=\"text-orange-600\">第 4 章</strong>，病假凭<strong>二级以上医院证明</strong>申请，3 天以内主管审批，超过 3 天 HR 审批。事假全年累计不超过 <strong>15 天</strong>，事假期间无薪。病假期间工资按国家规定发放。", ref: { id: "sec4", label: "第 4 章  病假与事假" } },
+        { kw: ["婚假", "产假", "陪产假", "结婚"], answer: "根据<strong class=\"text-orange-600\">第 6 章</strong>，婚假 <strong>3 天</strong>（晚婚增加 7 天），女员工产假 <strong>98 天</strong>（含产前 15 天），男员工陪产假 <strong>15 天</strong>。须提前 <strong>30 日</strong>凭有效证明申请。", ref: { id: "sec6", label: "第 6 章  婚假与产假" } },
+        { kw: ["迟到", "旷工", "缺勤", "打卡"], answer: "根据<strong class=\"text-orange-600\">第 7 章</strong>，迟到超 <strong>30 分钟</strong>计旷工半天，月累计 <strong>3 次</strong>以上记书面警告。连续旷工 <strong>3 天</strong>或年累计旷工 <strong>7 天</strong>以上，公司有权解除劳动合同。", ref: { id: "sec7", label: "第 7 章  迟到与旷工" } }
+      ],
+      "行业研报": [
+        { kw: ["趋势", "景气", "增速", "宏观", "环境"], answer: "根据报告<strong class=\"text-orange-600\">「宏观环境」</strong>部分，GDP 增速 <strong>5.2%</strong>，PMI 连续三个月扩张。新能源汽车购置税减免延续至 <strong>2027 年底</strong>，储能补贴试点城市扩至 <strong>30 个</strong>。欧盟碳关税过渡期启动，需关注出口核算要求。", ref: { id: "rep1", label: "一、宏观环境" } },
+        { kw: ["锂", "材料", "电池", "价格", "上游", "成本"], answer: "根据报告<strong class=\"text-orange-600\">「产业链分析」</strong>部分，碳酸锂均价回落至 <strong>12 万元/吨</strong>，电池厂商产能利用率回升至 <strong>78%</strong>，头部企业毛利率改善 <strong>3—5 个百分点</strong>。下游整车端渗透率突破 <strong>45%</strong>。", ref: { id: "rep2", label: "二、产业链分析" } },
+        { kw: ["竞争", "格局", "份额", "集中度", "龙头"], answer: "根据报告<strong class=\"text-orange-600\">「竞争格局」</strong>部分，行业集中度 CR5 约 <strong>58%</strong>（同比 +5pp），龙头企业通过垂直整合与规模效应挤压中小厂商。外资品牌在华份额下滑至 <strong>12%</strong>。", ref: { id: "rep3", label: "三、竞争格局" } },
+        { kw: ["风险", "产能过剩", "贸易", "壁垒", "隐患"], answer: "根据报告<strong class=\"text-orange-600\">「风险提示」</strong>部分，产能过剩风险从材料向电芯传导，行业平均毛利率有持续下行压力。海外贸易壁垒升级、锂资源进口依赖度高、终端需求增速放缓均构成核心风险。", ref: { id: "rep6", label: "六、风险提示" } },
+        { kw: ["投资", "建议", "推荐", "配置", "关注"], answer: "维持行业<strong class=\"text-orange-600\">标配评级</strong>。锂电材料库存去化尾声关注估值修复，整车环节优选有海外能力与成本优势的公司，储能赛道景气持续关注设备与集成商。", ref: { id: "rep5", label: "五、投资建议" } }
+      ],
+      "技术白皮书": [
+        { kw: ["零信任", "定义", "概念", "是什么", "概述"], answer: "根据白皮书<strong class=\"text-orange-600\">「概述」</strong>部分，零信任（Zero Trust）核心理念是<strong>「永不信任，始终验证」</strong>。假定网络始终处于被攻陷状态，不对任何用户、设备或流量给予隐式信任。", ref: { id: "zt1", label: "1. 概述" } },
+        { kw: ["原则", "核心", "理念", "三大原则"], answer: "根据白皮书<strong class=\"text-orange-600\">「核心理念」</strong>部分，零信任三大原则：一是<strong>显式验证</strong>，基于所有可用数据认证授权；二是<strong>最小权限</strong>，仅授予完成任务所需最少权限；三是<strong>假定入侵</strong>，最小化爆炸半径。", ref: { id: "zt2", label: "2. 核心理念" } },
+        { kw: ["mfa", "认证", "身份", "登录", "权限", "iam"], answer: "根据白皮书<strong class=\"text-orange-600\">「身份与访问管理」</strong>部分，采用<strong>多因素认证（MFA）</strong>作为基础手段，结合 RBAC 与 ABAC 实现动态细粒度授权，建议与现有 LDAP/AD 和 IAM 系统集成。", ref: { id: "zt3", label: "3. 身份与访问管理" } },
+        { kw: ["微隔离", "sdp", "横向移动", "网络"], answer: "根据白皮书<strong class=\"text-orange-600\">「微隔离技术」</strong>部分，通过<strong>SDP</strong>在工作负载间建立细粒度隔离，阻止攻击者横向移动。策略基于标签自动生成，通过策略即代码纳入 CI/CD 流水线管理。", ref: { id: "zt4", label: "4. 微隔离技术" } },
+        { kw: ["实施", "路径", "部署", "落地", "阶段"], answer: "建议<strong>分四阶段</strong>渐进实施：第一阶段梳理资产并部署 MFA；第二阶段实施应用层微隔离替代 VPN；第三阶段引入 UEBA 与 SOAR 联动；第四阶段实现自适应访问控制与策略自动化。", ref: { id: "zt7", label: "7. 实施路径建议" } },
+        { kw: ["误区", "错误", "注意", "坑", "避免"], answer: "常见误区有三：一是认为零信任是<strong>单一产品</strong>（实际是体系化架构）；二是<strong>一次性全量部署</strong>（应分批次从最敏感资产开始）；三是<strong>忽视用户体验</strong>（过度收紧策略将降低生产力）。", ref: { id: "zt8", label: "8. 常见误区与应对" } }
+      ]
+    };
+
+    var EXTRACT_PRESETS = {
+      "服务合同": {
+        "全部条款": ["第 1 条  定义与解释", "第 2 条  服务范围", "第 4 条  费用与结算", "第 6 条  知识产权", "第 7 条  保密义务", "第 8 条  数据安全", "第 10 条  违约责任", "第 12 条  协议终止", "第 13 条  争议解决"],
+        "核心义务": ["第 2 条  服务范围 — 乙方的核心交付义务", "第 4 条  费用与结算 — 甲方的付款义务", "第 5 条  交付与验收 — 双方的验收义务"],
+        "风险条款": ["第 10 条  违约责任 — 延期违约金 0.05%/日", "第 11 条  不可抗力 — 免责情形", "第 12 条  协议终止 — 提前 30 日通知"]
+      },
+      "制度手册": {
+        "全部要点": ["第 2 章  工作时间", "第 3 章  年假管理", "第 4 章  病假与事假", "第 5 章  加班管理", "第 6 章  婚假与产假", "第 7 章  迟到与旷工"],
+        "员工权益": ["第 3 章  年假管理 — 5—15 天年假", "第 5 章  加班管理 — 1.5—3 倍加班费", "第 6 章  婚假与产假 — 婚假 3 天/产假 98 天"],
+        "纪律条款": ["第 7 章  迟到与旷工 — 迟到 30 分钟计旷工半天", "第 7 章  旷工 — 连续 3 天可解除合同"]
+      },
+      "行业研报": {
+        "全部要点": ["一、宏观环境 — GDP 5.2%，政策延续", "二、产业链分析 — 锂价企稳，产能利用率 78%", "三、竞争格局 — CR5 58%", "四、技术趋势 — 固态电池 2026H2 量产", "五、投资建议 — 标配评级", "六、风险提示 — 产能过剩/贸易壁垒"],
+        "核心数据": ["GDP 增速 5.2%", "碳酸锂均价 12 万元/吨", "产能利用率 78%", "CR5 集中度 58%", "新能源渗透率 45%"],
+        "风险因素": ["产能过剩从材料向电芯传导", "海外贸易壁垒升级", "锂资源进口依赖度高", "终端需求增速放缓"]
+      },
+      "技术白皮书": {
+        "全部要点": ["概述 — 永不信任始终验证", "核心理念 — 三大原则", "身份与访问管理 — MFA+RBAC+ABAC", "微隔离技术 — SDP", "持续监控与分析 — UEBA+SOAR", "数据安全 — 加密+分类分级", "实施路径 — 四阶段渐进", "常见误区 — 非单一产品"],
+        "关键技术": ["多因素认证 MFA", "软件定义边界 SDP", "用户实体行为分析 UEBA", "透明数据加密 TDE", "安全编排自动化与响应 SOAR"],
+        "实施步骤": ["第一阶段: 资产梳理 + MFA 部署", "第二阶段: 微隔离替代 VPN", "第三阶段: UEBA + SOAR 联动", "第四阶段: 自适应访问控制"]
+      }
+    };
+
+    var EXTRACT_OPTIONS = {
+      "服务合同": ["全部条款", "核心义务", "风险条款"],
+      "制度手册": ["全部要点", "员工权益", "纪律条款"],
+      "行业研报": ["全部要点", "核心数据", "风险因素"],
+      "技术白皮书": ["全部要点", "关键技术", "实施步骤"]
+    };
+
+    var currentDoc = "服务合同";
+    var chatHistory = [];
+    var chatVersion = 0;
+
+    function renderDocView() {
+      var doc = DOCS[currentDoc];
+      var navEl = root.querySelector("[data-slot=\"nav-links\"]");
+      var bodyEl = root.querySelector("[data-slot=\"doc-body\"]");
+      var navHtml = "";
+      var bodyHtml = '<p class="font-semibold text-slate-900 mb-2 text-xs">' + escapeHtml(doc.title) + '</p>';
+      for (var i = 0; i < doc.chapters.length; i++) {
+        var ch = doc.chapters[i];
+        navHtml += '<button type="button" data-nav="' + ch.id + '" class="w-full text-left rounded-lg px-2 py-1.5 text-[11px] leading-relaxed text-slate-600 hover:bg-slate-100 hover:text-slate-800 transition">' + escapeHtml(ch.label) + '</button>';
+        bodyHtml += '<p data-sec="' + ch.id + '" class="rounded-lg transition-all ' + (i === 0 ? '' : 'mt-2') + '">' +
+          '<strong class="text-slate-800">' + escapeHtml(ch.label) + '</strong><br/>' +
+          escapeHtml(ch.text) + '</p>';
+      }
+      navEl.innerHTML = navHtml;
+      bodyEl.innerHTML = bodyHtml;
+      navEl.querySelectorAll("[data-nav]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var id = btn.getAttribute("data-nav");
+          var target = bodyEl.querySelector("[data-sec=\"" + id + "\"]");
+          if (target) {
+            target.scrollIntoView({ behavior: "smooth", block: "start" });
+            target.classList.add("bg-amber-50");
+            setTimeout(function () { target.classList.remove("bg-amber-50"); }, 1500);
+          }
+        });
+      });
+      renderExtractDropdown();
+    }
+
+    function renderExtractDropdown() {
+      var sel = root.querySelector("[data-field=\"extract-type\"]");
+      if (!sel) return;
+      var options = EXTRACT_OPTIONS[currentDoc] || [];
+      var html = '<option value="">-- 选择抽取类型 --</option>';
+      for (var i = 0; i < options.length; i++) {
+        html += '<option value="' + escapeHtml(options[i]) + '">' + escapeHtml(options[i]) + '</option>';
+      }
+      sel.innerHTML = html;
+    }
+
+    function matchQA(question, docType) {
+      var presets = QA_PRESETS[docType] || [];
+      var q = question.toLowerCase();
+      for (var i = 0; i < presets.length; i++) {
+        var p = presets[i];
+        for (var j = 0; j < p.kw.length; j++) {
+          if (q.indexOf(p.kw[j].toLowerCase()) >= 0) {
+            return p;
+          }
+        }
+      }
+      var hints = {
+        "服务合同": "建议围绕合同条款提问，例如：终止条件、费用结算、保密义务、知识产权归属、违约责任等。",
+        "制度手册": "建议围绕考勤制度提问，例如：年假天数、加班政策、病假申请、婚假产假、迟到旷工处理等。",
+        "行业研报": "建议围绕研报内容提问，例如：行业趋势、产业链分析、竞争格局、技术趋势、投资建议、风险提示等。",
+        "技术白皮书": "建议围绕零信任架构提问，例如：核心理念、身份管理、微隔离、实施路径、常见误区等。"
+      };
+      return {
+        answer: '该问题在「' + escapeHtml(DOCS[docType].title) + '」中未找到明确匹配的条款或段落。<br/><br/><span class="text-slate-500 text-xs">' + (hints[docType] || '') + '</span>',
+        ref: null
+      };
+    }
+
+    function addChatBubble(role, text, ref) {
+      var chatEl = root.querySelector("[data-slot=\"chat\"]");
+      var isUser = role === "user";
+      var html = '<div class="flex ' + (isUser ? 'justify-end' : 'justify-start') + '">' +
+        '<div class="max-w-[90%] rounded-2xl px-3 py-2 text-sm leading-relaxed ' + (isUser ? 'bg-orange-500 text-white' : 'bg-white text-slate-700 border border-slate-200') + '">' +
+        text + '</div></div>';
+      if (ref) {
+        html += '<div class="flex justify-start mt-1"><button type="button" data-ref="' + ref.id + '" class="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900 transition hover:bg-amber-100">定位到 ' + escapeHtml(ref.label) + '</button></div>';
+      }
+      var temp = document.createElement("div");
+      temp.innerHTML = html;
+      while (temp.firstChild) {
+        chatEl.appendChild(temp.firstChild);
+      }
+      chatEl.querySelectorAll("[data-ref]:not([data-bound])").forEach(function (btn) {
+        btn.setAttribute("data-bound", "1");
+        var refId = btn.getAttribute("data-ref");
+        btn.addEventListener("click", function () {
+          var bodyEl = root.querySelector("[data-slot=\"doc-body\"]");
+          var target = bodyEl.querySelector("[data-sec=\"" + refId + "\"]");
+          if (target) {
+            target.scrollIntoView({ behavior: "smooth", block: "center" });
+            target.classList.add("bg-amber-100", "ring-2", "ring-orange-400");
+            setTimeout(function () {
+              target.classList.remove("bg-amber-100", "ring-2", "ring-orange-400");
+            }, 2000);
+          }
+        });
+      });
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    function extractClauses(type) {
+      var presets = EXTRACT_PRESETS[currentDoc];
+      if (!presets || !presets[type]) {
+        addChatBubble("ai", '当前文档类型不支持「' + escapeHtml(type) + '」抽取。请切换抽取类型后重试。', null);
+        return;
+      }
+      var listHtml = '<div class="rounded-lg border border-amber-200 bg-amber-50 p-2 mb-2 text-xs text-amber-800">所抽取的关键条款来自「' + escapeHtml(DOCS[currentDoc].title) + '」· 类型：' + escapeHtml(type) + '</div>';
+      listHtml += '<ul class="space-y-1">';
+      var items = presets[type];
+      for (var i = 0; i < items.length; i++) {
+        listHtml += '<li class="flex items-center gap-1.5 text-xs text-slate-700"><span class="inline-flex h-1 w-1 rounded-full bg-orange-500 shrink-0"></span>' + escapeHtml(items[i]) + '</li>';
+      }
+      listHtml += '</ul>';
+      addChatBubble("ai", listHtml, null);
+      chatHistory.push({ role: "ai", text: listHtml });
+    }
+
     root.innerHTML = shell("长文本问答与追溯", (
+      '<div class="flex flex-wrap gap-2 mb-4">' +
+      ["服务合同", "制度手册", "行业研报", "技术白皮书"].map(function (t) {
+        return '<button type="button" data-tab="' + t + '" class="rounded-full px-3.5 py-1.5 text-xs font-medium transition ' + (t === currentDoc ? 'bg-orange-500 text-white shadow-sm shadow-orange-500/25' : 'bg-slate-100 text-slate-600 hover:bg-slate-200') + '">' + escapeHtml(t) + '</button>';
+      }).join("") +
+      '</div>' +
       '<div class="grid gap-4 lg:grid-cols-2">' +
-      '<div class="max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-600">' +
-      "<p><strong class=\"text-slate-800\">第 7 条</strong> 服务期限自双方签署之日起生效，除非依第 12 条提前终止…</p>" +
-      "<p class=\"mt-2\"><strong class=\"text-slate-800\">第 12 条</strong> 任何一方提前 30 日书面通知可终止本协议，终止前已产生的费用仍应结算…</p>" +
-      "<p class=\"mt-2\"><strong class=\"text-slate-800\">附件 A</strong> 数据出境须遵守适用法律法规及双方 DPA…</p></div>" +
-      '<div><label class="text-xs font-medium text-slate-600">追问</label>' +
-      '<input type="text" data-field="qq" value="提前终止需要提前多久通知？" ' +
-      'class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />' +
-      '<button type="button" data-action="qa" class="mt-2 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">生成回答（模拟）</button>' +
-      '<div data-slot="ans" class="mt-3 hidden rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-700"></div></div></div>'
+      '<div>' +
+      '<p class="text-xs font-medium text-slate-600 mb-2">文档预览与章节导航</p>' +
+      '<div class="flex gap-3">' +
+      '<div data-slot="nav-links" class="w-32 shrink-0 max-h-[420px] overflow-y-auto space-y-0.5 rounded-xl border border-slate-200 bg-slate-50/50 p-2"></div>' +
+      '<div data-slot="doc-body" class="min-w-0 flex-1 max-h-[420px] overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-600"></div>' +
+      '</div>' +
+      '</div>' +
+      '<div>' +
+      '<p class="text-xs font-medium text-slate-600 mb-2">多轮对话与关键条款抽取</p>' +
+      '<div class="mb-3 flex items-center gap-2">' +
+      '<select data-field="extract-type" class="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs"></select>' +
+      '<button type="button" data-action="extract" class="shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 hover:bg-amber-100">抽取</button>' +
+      '</div>' +
+      '<div data-slot="chat" class="max-h-[300px] overflow-y-auto space-y-2 mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"></div>' +
+      '<div class="flex gap-2">' +
+      '<input type="text" data-field="question" placeholder="输入问题，例如：提前终止需要提前多久通知？" ' +
+      'class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm outline-none ring-orange-500/20 transition focus:border-orange-500 focus:bg-white focus:ring-4" />' +
+      '<button type="button" data-action="send" class="shrink-0 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white shadow-sm shadow-orange-500/25 hover:bg-orange-600">发送</button>' +
+      '</div>' +
+      '<div class="mt-2 flex items-center gap-2">' +
+      '<button type="button" data-action="clear" class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50">清空对话</button>' +
+      '<span class="text-[10px] text-slate-400">上下文连续追问 · 模拟演示</span>' +
+      '</div>' +
+      '</div>' +
+      '</div>'
     ));
-    bind(root, "[data-action=\"qa\"]", "click", function () {
-      var out = root.querySelector("[data-slot=\"ans\"]");
-      out.classList.remove("hidden");
-      out.innerHTML =
-        "根据<strong class=\"text-orange-600\">第 12 条</strong>，提前终止需<strong>至少 30 日书面通知</strong>；" +
-        '终止前已发生费用仍需结算。引用：<button type="button" class="text-xs text-orange-600 underline">定位到原文 L128-L131</button>（模拟）';
+
+    renderDocView();
+
+    root.querySelectorAll("[data-tab]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var newDoc = btn.getAttribute("data-tab");
+        if (newDoc === currentDoc) return;
+        currentDoc = newDoc;
+        chatVersion++;
+        root.querySelectorAll("[data-tab]").forEach(function (b) {
+          b.className = "rounded-full px-3.5 py-1.5 text-xs font-medium transition " +
+            (b.getAttribute("data-tab") === currentDoc ? "bg-orange-500 text-white shadow-sm shadow-orange-500/25" : "bg-slate-100 text-slate-600 hover:bg-slate-200");
+        });
+        chatHistory = [];
+        root.querySelector("[data-slot=\"chat\"]").innerHTML = "";
+        renderDocView();
+      });
+    });
+
+    bind(root, "[data-action=\"send\"]", "click", function () {
+      var inp = root.querySelector("[data-field=\"question\"]");
+      var question = inp.value.trim();
+      if (!question) return;
+      var docAtAsk = currentDoc;
+      var versionAtAsk = chatVersion;
+      addChatBubble("user", escapeHtml(question), null);
+      chatHistory.push({ role: "user", text: question });
+      inp.value = "";
+      var chatEl = root.querySelector("[data-slot=\"chat\"]");
+      var loadingWrapper = document.createElement("div");
+      loadingWrapper.className = "flex justify-start";
+      loadingWrapper.setAttribute("data-loading", "1");
+      loadingWrapper.innerHTML = '<div class="rounded-2xl bg-white border border-slate-200 px-3 py-2 text-xs text-slate-500">' + spinHtml() + ' 正在检索文档…</div>';
+      chatEl.appendChild(loadingWrapper);
+      chatEl.scrollTop = chatEl.scrollHeight;
+      setTimeout(function () {
+        var loader = chatEl.querySelector("[data-loading]");
+        if (loader) loader.remove();
+        if (versionAtAsk !== chatVersion || docAtAsk !== currentDoc) return;
+        var result = matchQA(question, docAtAsk);
+        addChatBubble("ai", result.answer, result.ref);
+        chatHistory.push({ role: "ai", text: result.answer, ref: result.ref });
+      }, 800);
+    });
+
+    bind(root, "[data-field=\"question\"]", "keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        root.querySelector("[data-action=\"send\"]").click();
+      }
+    });
+
+    bind(root, "[data-action=\"extract\"]", "click", function () {
+      var typeEl = root.querySelector("[data-field=\"extract-type\"]");
+      var type = typeEl.value;
+      if (!type) {
+        addChatBubble("ai", '<span class="text-red-600">请先在左侧下拉框中选择要抽取的条款类型。</span>', null);
+        return;
+      }
+      extractClauses(type);
+      typeEl.value = "";
+    });
+
+    bind(root, "[data-action=\"clear\"]", "click", function () {
+      chatVersion++;
+      chatHistory = [];
+      root.querySelector("[data-slot=\"chat\"]").innerHTML = "";
     });
   }
 
