@@ -123,6 +123,88 @@ def test_employee_training_api_returns_coach_report(monkeypatch, tmp_path):
     assert "合规风险：绿灯" in data["reply"]
 
 
+def test_employee_training_keeps_session_memory(monkeypatch, tmp_path):
+    app_module = load_app(monkeypatch, tmp_path)
+    captured_history = []
+
+    def fake_training_reply(user_message, round_no, history):
+        captured_history.append([turn.content for turn in history])
+        return app_module.EmployeeTrainingReply(
+            phase="roleplay",
+            role="customer",
+            reply=f"收到：{user_message}",
+        )
+
+    monkeypatch.setattr(
+        app_module,
+        "request_deepseek_employee_training",
+        fake_training_reply,
+        raising=False,
+    )
+
+    with TestClient(app_module.app) as client:
+        headers = auth_headers(client)
+        product_id = employee_training_product_id(client, headers)
+        for message in ("第一轮回应", "第二轮回应"):
+            response = client.post(
+                "/api/employee-training/respond",
+                headers=headers,
+                json={
+                    "product_id": product_id,
+                    "user_message": message,
+                    "round": 1,
+                    "session_id": "memory-test",
+                    "history": [],
+                },
+            )
+            assert response.status_code == 200
+
+    assert captured_history[0] == []
+    assert "第一轮回应" in captured_history[1]
+    assert "收到：第一轮回应" in captured_history[1]
+
+
+def test_employee_training_stream_returns_sse(monkeypatch, tmp_path):
+    app_module = load_app(monkeypatch, tmp_path)
+
+    def fake_training_reply(user_message, round_no, history):
+        return app_module.EmployeeTrainingReply(
+            phase="roleplay",
+            role="customer",
+            reply="这是流式返回的客户追问。",
+        )
+
+    monkeypatch.setattr(
+        app_module,
+        "request_deepseek_employee_training",
+        fake_training_reply,
+        raising=False,
+    )
+
+    with TestClient(app_module.app) as client:
+        headers = auth_headers(client)
+        product_id = employee_training_product_id(client, headers)
+        with client.stream(
+            "POST",
+            "/api/employee-training/respond/stream",
+            headers=headers,
+            json={
+                "product_id": product_id,
+                "user_message": "开始流式陪练",
+                "round": 1,
+                "session_id": "sse-test",
+                "history": [],
+            },
+        ) as response:
+            body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+    assert "event: status" in body
+    assert "event: result" in body
+    assert "这是流式返回的客户追问" in body
+
+
 def test_employee_training_api_requires_deepseek_key(monkeypatch, tmp_path):
     app_module = load_app(monkeypatch, tmp_path)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)

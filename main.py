@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import bcrypt
 from jose import JWTError, jwt
@@ -49,6 +49,8 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 
 security = HTTPBearer(auto_error=False)
+TRAINING_MEMORY_LIMIT = 24
+TRAINING_MEMORY: dict[str, list["EmployeeTrainingTurn"]] = {}
 
 # 演示账号（与下方初始化数据一致）；用于在升级依赖后修复历史库里损坏的密码哈希
 USERS_SEED: list[tuple[str, str, str | None]] = [
@@ -573,6 +575,7 @@ class EmployeeTrainingRequest(BaseModel):
     product_id: int
     user_message: str = Field(min_length=1, max_length=800)
     round: int = Field(default=0, ge=0, le=30)
+    session_id: str | None = Field(default=None, max_length=80)
     history: list[EmployeeTrainingTurn] = Field(default_factory=list)
 
 
@@ -829,6 +832,40 @@ def _normalize_employee_training_reply(raw: dict[str, Any]) -> EmployeeTrainingR
         signals=_string_list(raw.get("signals"), []),
         suggestions=_string_list(raw.get("suggestions"), []),
     )
+
+
+def _training_memory_key(user: dict[str, Any], session_id: str | None) -> str | None:
+    clean_session = (session_id or "").strip()
+    if not clean_session:
+        return None
+    return f"{user['username']}:{clean_session}"
+
+
+def _employee_training_history(
+    body: EmployeeTrainingRequest,
+    user: dict[str, Any],
+) -> tuple[str | None, list[EmployeeTrainingTurn]]:
+    key = _training_memory_key(user, body.session_id)
+    if key and key in TRAINING_MEMORY:
+        return key, list(TRAINING_MEMORY[key])
+    return key, list(body.history[-TRAINING_MEMORY_LIMIT:])
+
+
+def _remember_employee_training_turn(
+    key: str | None,
+    user_message: str,
+    reply: EmployeeTrainingReply,
+) -> None:
+    if not key:
+        return
+    turns = TRAINING_MEMORY.setdefault(key, [])
+    turns.append(EmployeeTrainingTurn(role="user", content=user_message))
+    turns.append(EmployeeTrainingTurn(role=reply.role, content=reply.reply))
+    del turns[:-TRAINING_MEMORY_LIMIT]
+
+
+def _sse_event(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def _clinical_pathway_risk_level(text: str) -> str:
@@ -1217,8 +1254,9 @@ def respond_employee_training(
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
 
+    memory_key, history = _employee_training_history(body, user)
     try:
-        reply = request_deepseek_employee_training(body.user_message, body.round, body.history)
+        reply = request_deepseek_employee_training(body.user_message, body.round, history)
     except DeepSeekConfigError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1229,7 +1267,51 @@ def respond_employee_training(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
         ) from exc
+    _remember_employee_training_turn(memory_key, body.user_message, reply)
     return EmployeeTrainingResponse(success=True, data=reply)
+
+
+@app.post("/api/employee-training/respond/stream")
+def stream_employee_training(
+    body: EmployeeTrainingRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> StreamingResponse:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (body.product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != EMPLOYEE_TRAINING_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+
+    def event_stream() -> Any:
+        memory_key, history = _employee_training_history(body, user)
+        yield _sse_event(
+            "status",
+            {"message": "已读取会话记忆，正在请求 DeepSeek", "memory_turns": len(history)},
+        )
+        try:
+            reply = request_deepseek_employee_training(body.user_message, body.round, history)
+            _remember_employee_training_turn(memory_key, body.user_message, reply)
+            yield _sse_event(
+                "result",
+                EmployeeTrainingResponse(success=True, data=reply).model_dump(),
+            )
+        except DeepSeekConfigError as exc:
+            yield _sse_event("error", {"message": str(exc), "status_code": 503})
+        except DeepSeekResponseError as exc:
+            yield _sse_event("error", {"message": str(exc), "status_code": 502})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/clinical-pathway/suggest", response_model=ClinicalPathwayResponse)
