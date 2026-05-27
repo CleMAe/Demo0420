@@ -853,26 +853,140 @@
   }
 
   function demoTrainBot(root) {
-    root.innerHTML = shell("销售陪练回合", (
-      '<div data-slot="chat" class="max-h-52 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">' +
-      '<p class="rounded-lg bg-white p-2 text-slate-700"><span class="text-xs text-slate-400">客户 · </span>你们比竞品贵 15%，凭什么？</p></div>' +
+    // 培训陪练场景剧本：演示脚本、话术样例与评分文案（尚欢欢）
+    var SCENARIOS = [
+      {
+        id: "price",
+        label: "价格异议",
+        opening: "你们比竞品贵 15%，凭什么？",
+        coachGood: "先认同客户对预算的敏感，再讲清 ROI 与服务差异，并给出可验证的下一步（如方案演示或试用），避免直接降价（模拟）。",
+        coachDefault: "建议先共情再陈述价值锚点，可补充案例、SLA 或风险共担条款，避免陷入单纯比价（模拟）。",
+        dims: [
+          { name: "共情", keys: ["理解", "明白", "感受", "确实", "抱歉"] },
+          { name: "价值陈述", keys: ["价值", "roi", "回报", "服务", "质量", "案例", "sla", "保障", "差异"] },
+          { name: "下一步承诺", keys: ["方案", "演示", "安排", "约", "下一步", "确认", "试用"] }
+        ]
+      },
+      {
+        id: "compliance",
+        label: "合规返点",
+        opening: "能不能私下给我返点？大家都这么操作。",
+        coachGood: "拒绝明确、语气平稳，并引用制度说明正规渠道；可主动介绍合规替代方案，避免含糊或口头承诺（模拟）。",
+        coachDefault: "需明确拒绝私下返点，引用公司制度与审批流程，并引导客户走正规商务路径（模拟）。",
+        dims: [
+          { name: "拒绝明确", keys: ["不能", "无法", "不可以", "不行", "违规", "不允许"] },
+          { name: "引用制度", keys: ["制度", "规定", "流程", "审批", "合规", "书面", "合同"] },
+          { name: "合规引导", keys: ["正规", "渠道", "替代", "介绍", "说明", "官方"] }
+        ]
+      },
+      {
+        id: "complaint",
+        label: "配送投诉",
+        opening: "等了一周还没送到，必须给我说法！",
+        coachGood: "先安抚情绪并致歉，再说明核查动作与时效承诺，给出明确回访方式，避免空泛推诿（模拟）。",
+        coachDefault: "建议先表达理解与歉意，承诺具体核查时限，并告知后续联系渠道，避免使用「没办法」等推诿表述（模拟）。",
+        dims: [
+          { name: "共情", keys: ["理解", "抱歉", "不好意思", "感受", "等待", "着急"] },
+          { name: "处理动作", keys: ["查", "核实", "跟进", "处理", "补偿", "时效", "今天", "立即"] },
+          { name: "回访承诺", keys: ["回访", "联系", "确认", "电话", "短信", "小时", "内"] }
+        ]
+      }
+    ];
+
+    function getScenario() {
+      var sel = root.querySelector("[data-field=\"scenario\"]");
+      var id = sel ? sel.value : SCENARIOS[0].id;
+      for (var i = 0; i < SCENARIOS.length; i++) {
+        if (SCENARIOS[i].id === id) return SCENARIOS[i];
+      }
+      return SCENARIOS[0];
+    }
+
+    function hitDim(reply, dim) {
+      var text = String(reply || "").toLowerCase();
+      for (var i = 0; i < dim.keys.length; i++) {
+        if (text.indexOf(dim.keys[i].toLowerCase()) >= 0) return true;
+      }
+      return false;
+    }
+
+    function buildScore(scenario, reply) {
+      var parts = [];
+      var hitCount = 0;
+      for (var i = 0; i < scenario.dims.length; i++) {
+        var dim = scenario.dims[i];
+        var ok = hitDim(reply, dim);
+        if (ok) hitCount += 1;
+        parts.push(dim.name + " " + (ok ? "✓" : "△"));
+      }
+      var grade = hitCount >= scenario.dims.length ? "A" : hitCount >= 2 ? "B" : "C";
+      return "本轮要点命中：" + parts.join("  ") + " · 综合 " + grade + "（模拟评分，仅供培训参考）";
+    }
+
+    function pickCoachFeedback(scenario, reply) {
+      var hits = 0;
+      for (var i = 0; i < scenario.dims.length; i++) {
+        if (hitDim(reply, scenario.dims[i])) hits += 1;
+      }
+      return hits >= 2 ? scenario.coachGood : scenario.coachDefault;
+    }
+
+    function renderChatOpening(scenario) {
+      return (
+        '<p class="rounded-lg bg-white p-2 text-slate-700"><span class="text-xs text-slate-400">客户 · </span>' +
+        escapeHtml(scenario.opening) +
+        "</p>"
+      );
+    }
+
+    function resetRound() {
+      var scenario = getScenario();
+      var chat = root.querySelector("[data-slot=\"chat\"]");
+      var sc = root.querySelector("[data-slot=\"score\"]");
+      if (chat) chat.innerHTML = renderChatOpening(scenario);
+      if (sc) {
+        sc.classList.add("hidden");
+        sc.textContent = "";
+      }
+    }
+
+    root.innerHTML = shell("销售与合规陪练", (
+      '<label class="block text-xs font-medium text-slate-600">陪练场景</label>' +
+      '<select data-field="scenario" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      SCENARIOS.map(function (s) {
+        return '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.label) + "</option>";
+      }).join("") +
+      "</select>" +
+      '<div data-slot="chat" class="mt-3 max-h-52 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">' +
+      renderChatOpening(SCENARIOS[0]) +
+      "</div>" +
       '<div class="mt-2 flex gap-2">' +
       '<input type="text" data-field="reply" placeholder="输入你的回应…" ' +
       'class="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm" />' +
-      '<button type="button" data-action="send" class="rounded-xl bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600">发送</button></div>' +
-      '<p data-slot="score" class="mt-2 hidden text-xs text-slate-600"></p>'
+      '<button type="button" data-action="send" class="rounded-xl bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600">发送</button>' +
+      '<button type="button" data-action="reset" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">重来</button></div>' +
+      '<p data-slot="score" class="mt-2 hidden text-xs leading-relaxed text-slate-600"></p>' +
+      '<p class="mt-2 text-xs leading-relaxed text-slate-400">⚠ 演示数据与评分为前端模拟，不代表真实质检或 AI 判定结果。</p>'
     ));
+
+    bind(root, "[data-field=\"scenario\"]", "change", resetRound);
+    bind(root, "[data-action=\"reset\"]", "click", function () {
+      var inp = root.querySelector("[data-field=\"reply\"]");
+      if (inp) inp.value = "";
+      resetRound();
+    });
     bind(root, "[data-action=\"send\"]", "click", function () {
+      var scenario = getScenario();
       var chat = root.querySelector("[data-slot=\"chat\"]");
       var inp = root.querySelector("[data-field=\"reply\"]");
       var v = inp.value.trim() || "（未输入，使用默认回应）";
       chat.innerHTML +=
         '<p class="rounded-lg bg-orange-50 p-2 text-slate-800"><span class="text-xs text-orange-600">坐席 · </span>' + escapeHtml(v) + "</p>" +
-        '<p class="rounded-lg bg-white p-2 text-slate-700"><span class="text-xs text-slate-400">教练 · </span>可补充价值锚点与风险共担条款，避免单纯降价（模拟）。</p>';
+        '<p class="rounded-lg bg-white p-2 text-slate-700"><span class="text-xs text-slate-400">教练 · </span>' + escapeHtml(pickCoachFeedback(scenario, v)) + "</p>";
       inp.value = "";
       var sc = root.querySelector("[data-slot=\"score\"]");
       sc.classList.remove("hidden");
-      sc.textContent = "本轮要点命中：共情 ✓  价值陈述 △  下一步承诺 ✓（模拟评分）";
+      sc.textContent = buildScore(scenario, v);
     });
   }
 
