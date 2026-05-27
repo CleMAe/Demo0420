@@ -814,6 +814,23 @@ def build_employee_training_reply(
     )
 
 
+def _normalize_employee_training_reply(raw: dict[str, Any]) -> EmployeeTrainingReply:
+    phase = str(raw.get("phase") or "").strip()
+    if phase not in {"roleplay", "report"}:
+        phase = "report" if raw.get("score") is not None else "roleplay"
+    role = str(raw.get("role") or "").strip()
+    if not role:
+        role = "coach" if phase == "report" else "customer"
+    return EmployeeTrainingReply(
+        phase=phase,
+        role=role,
+        reply=str(raw.get("reply") or "我需要更具体的信息，才能继续推进这轮陪练。").strip(),
+        score=None if raw.get("score") is None else _clamp_score(raw.get("score"), 60),
+        signals=_string_list(raw.get("signals"), []),
+        suggestions=_string_list(raw.get("suggestions"), []),
+    )
+
+
 def _clinical_pathway_risk_level(text: str) -> str:
     high_risk_words = ("休克", "意识障碍", "呼吸困难", "胸痛", "低氧", "抽搐", "昏迷", "大出血")
     medium_risk_words = ("高热", "持续呕吐", "脱水", "黄疸", "剧痛", "感染", "血压升高")
@@ -957,6 +974,84 @@ def request_deepseek_customer_script(intent: str, customer_message: str) -> Cust
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
         raise DeepSeekResponseError("DeepSeek API 响应结构异常") from exc
     return _normalize_customer_script_suggestion(_json_object_from_text(content))
+
+
+def request_deepseek_employee_training(
+    user_message: str,
+    round_no: int,
+    history: list[EmployeeTrainingTurn],
+) -> EmployeeTrainingReply:
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not api_key:
+        raise DeepSeekConfigError("未配置 DeepSeek API Key")
+
+    base_url = os.environ.get("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL).rstrip("/")
+    model = os.environ.get("DEEPSEEK_MODEL", DEEPSEEK_MODEL).strip() or DEEPSEEK_MODEL
+    timeout = float(os.environ.get("DEEPSEEK_TIMEOUT", "20"))
+    history_payload = [
+        {"role": turn.role, "content": turn.content}
+        for turn in history[-12:]
+    ]
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是企业员工培训陪练系统，负责销售和合规场景演练。"
+                    "默认扮演刁钻客户李总，回复要像真实商务聊天，每次 2-3 句话。"
+                    "你需要在多轮对话中制造价格异议、竞品压价、效果承诺、私下保底或回扣等合规陷阱。"
+                    "当用户消息包含 /end 时，切换为 AI 教练，输出复盘报告。"
+                    "只输出 JSON 对象，不要输出 Markdown 代码块。字段必须包含："
+                    "phase、role、reply、score、signals、suggestions。"
+                    "phase 只能是 roleplay 或 report；role 使用 customer 或 coach；"
+                    "reply 是中文回复；score 在 report 阶段为 0-100 整数，roleplay 阶段可为 null；"
+                    "signals 和 suggestions 必须是字符串数组。"
+                    "复盘必须评估销售技巧和合规风险，明确指出是否踩中口头承诺、私下保底、回扣等红线。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "round": round_no,
+                        "history": history_payload,
+                        "user_message": user_message,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+        "temperature": 0.6,
+        "max_tokens": 900,
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")[:300]
+        raise DeepSeekResponseError(f"DeepSeek API 返回错误：{exc.code} {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise DeepSeekResponseError(f"DeepSeek API 请求失败：{exc.reason}") from exc
+    except TimeoutError as exc:
+        raise DeepSeekResponseError("DeepSeek API 请求超时") from exc
+
+    try:
+        data = json.loads(body)
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise DeepSeekResponseError("DeepSeek API 响应结构异常") from exc
+    return _normalize_employee_training_reply(_json_object_from_text(content))
 
 
 # -----------------------------------------------------------------------------
@@ -1122,7 +1217,18 @@ def respond_employee_training(
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
 
-    reply = build_employee_training_reply(body.user_message, body.round, body.history)
+    try:
+        reply = request_deepseek_employee_training(body.user_message, body.round, body.history)
+    except DeepSeekConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except DeepSeekResponseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
     return EmployeeTrainingResponse(success=True, data=reply)
 
 
