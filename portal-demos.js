@@ -970,6 +970,7 @@
       '<button type="button" data-action="send" class="rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">发送</button>' +
       '<button type="button" data-action="end" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">结束</button>' +
       "</div>" +
+      '<p data-slot="status" class="mt-2 hidden text-xs text-slate-500"></p>' +
       '<div data-slot="coach" class="mt-3 hidden rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm leading-relaxed text-slate-700"></div>'
     ));
 
@@ -978,6 +979,9 @@
     var send = root.querySelector("[data-action=\"send\"]");
     var end = root.querySelector("[data-action=\"end\"]");
     var coach = root.querySelector("[data-slot=\"coach\"]");
+    var statusLine = root.querySelector("[data-slot=\"status\"]");
+    var sessionId = "training-" + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now()));
+    var locked = false;
 
     function append(role, text) {
       var label = role === "user" ? "我" : role === "coach" ? "教练" : "李总";
@@ -1001,7 +1005,14 @@
       send.textContent = busy ? "生成中…" : "发送";
     }
 
+    function setStatus(text) {
+      if (!statusLine) return;
+      statusLine.textContent = text || "";
+      statusLine.classList.toggle("hidden", !text);
+    }
+
     function showCoach(data) {
+      locked = true;
       coach.classList.remove("hidden");
       coach.innerHTML =
         '<p class="mb-1 text-xs font-semibold text-emerald-700">AI 教练复盘</p>' +
@@ -1009,46 +1020,95 @@
       input.disabled = true;
       send.disabled = true;
       end.disabled = true;
+      send.textContent = "已结束";
+      end.textContent = "已结束";
+    }
+
+    function handleStreamEvent(block) {
+      var eventName = "message";
+      var dataText = "";
+      block.split(/\n/).forEach(function (line) {
+        if (line.indexOf("event:") === 0) eventName = line.slice(6).trim();
+        if (line.indexOf("data:") === 0) dataText += line.slice(5).trim();
+      });
+      if (!dataText) return;
+      var payload = JSON.parse(dataText);
+      if (eventName === "status") {
+        setStatus(payload.message || "正在请求 DeepSeek…");
+        return;
+      }
+      if (eventName === "error") {
+        throw new Error(payload.message || "陪练接口调用失败");
+      }
+      if (eventName !== "result") return;
+      var data = payload && payload.data;
+      if (!data) throw new Error("陪练响应为空");
+      setStatus("");
+      if (data.phase === "report") {
+        append("coach", data.reply);
+        showCoach(data);
+      } else {
+        append("assistant", data.reply);
+      }
+    }
+
+    function readEventStream(response) {
+      if (!response.ok) {
+        return response.json().then(function (data) {
+          throw new Error((data && data.detail) || "陪练接口调用失败");
+        });
+      }
+      if (!response.body || !window.TextDecoder) {
+        return response.json().then(function (payload) {
+          handleStreamEvent("event: result\ndata: " + JSON.stringify(payload));
+        });
+      }
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder("utf-8");
+      var buffer = "";
+      function pump() {
+        return reader.read().then(function (result) {
+          buffer += decoder.decode(result.value || new Uint8Array(), { stream: !result.done });
+          var parts = buffer.split(/\n\n/);
+          buffer = parts.pop() || "";
+          parts.forEach(handleStreamEvent);
+          if (result.done) {
+            if (buffer.trim()) handleStreamEvent(buffer);
+            return;
+          }
+          return pump();
+        });
+      }
+      return pump();
     }
 
     function sendMessage(text) {
       var value = text.trim();
-      if (!value) return;
+      if (!value || send.disabled) return;
       round += 1;
       append("user", value);
       input.value = "";
+      locked = false;
       setBusy(true);
-      fetch(apiBase() + "/api/employee-training/respond", {
+      setStatus("正在连接 DeepSeek…");
+      fetch(apiBase() + "/api/employee-training/respond/stream", {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           product_id: product && product.id,
           user_message: value,
           round: round,
+          session_id: sessionId,
           history: history.slice(-12)
         })
       })
-        .then(function (res) {
-          return res.json().then(function (data) {
-            if (!res.ok) throw new Error((data && data.detail) || "陪练接口调用失败");
-            return data;
-          });
-        })
-        .then(function (payload) {
-          var data = payload && payload.data;
-          if (!data) throw new Error("陪练响应为空");
-          if (data.phase === "report") {
-            append("coach", data.reply);
-            showCoach(data);
-          } else {
-            append("assistant", data.reply);
-          }
-        })
+        .then(readEventStream)
         .catch(function (ex) {
+          setStatus("");
           append("coach", "接口暂不可用：" + (ex.message || "未知错误") + "。请确认已通过 Docker 服务地址访问并已登录。");
         })
         .finally(function () {
-          if (!input.disabled) setBusy(false);
+          if (!locked) setBusy(false);
         });
     }
 
