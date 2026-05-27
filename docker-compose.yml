@@ -11,6 +11,10 @@ services:
     environment:
       JWT_SECRET: ${JWT_SECRET:-portal-dev-secret-change-in-prod}
       PORTAL_BRAND_NAME: ${PORTAL_BRAND_NAME:-智能体Demo平台}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      DEEPSEEK_TIMEOUT: ${DEEPSEEK_TIMEOUT:-20}
     restart: unless-stopped
 
   web:
