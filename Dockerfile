@@ -2,20 +2,16 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-ARG PIP_DEFAULT_TIMEOUT=120
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     SQLITE_PATH=/data/portal.db
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir \
-    --index-url "${PIP_INDEX_URL}" \
-    --timeout "${PIP_DEFAULT_TIMEOUT}" \
-    -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
+
+RUN mkdir -p /data
 
 EXPOSE 8000
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>工作台</title>
+  <title>工作台 · 智能体Demo平台</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -16,6 +16,7 @@
   </script>
 </head>
 <body class="min-h-screen bg-slate-50 text-slate-800 antialiased">
+
   <header class="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur-md">
     <div class="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6">
       <div class="flex items-center gap-3">
@@ -66,15 +67,10 @@
     (function () {
       var token = localStorage.getItem('portal_token');
       var userRaw = localStorage.getItem('portal_user');
-      if (!token) {
-        window.location.href = 'login.html';
-        return;
-      }
+      if (!token) { window.location.href = 'login.html'; return; }
 
       var user = {};
-      try {
-        user = userRaw ? JSON.parse(userRaw) : {};
-      } catch (e) {}
+      try { user = userRaw ? JSON.parse(userRaw) : {}; } catch (_) {}
 
       var sub = document.getElementById('nav-sub');
       if (sub && user.username) {
@@ -88,200 +84,14 @@
         localStorage.removeItem('portal_user');
         window.location.href = 'login.html';
       });
-
-      function apiBase() {
-        if (!window.location.host) {
-          return 'http://127.0.0.1';
-        }
-        return '';
-      }
-
-      var INDUSTRY_ORDER = ['全部', '金融', '医疗', '科技', '跨行业通用', '研发与运维', '客户与增长', '管理战略'];
-      var TECH_ORDER = [
-        '全部', '大模型与 RAG', '代码与 IDE 智能', 'NLP 与文档智能', '机器学习与风控建模',
-        '计算机视觉', 'AIOps 与日志智能', '对话式 AI', '智能体编排与网关', '数据分析与可视化'
-      ];
-
-      function sortIndustries(names) {
-        var set = {};
-        names.forEach(function (n) { set[n] = true; });
-        var out = [];
-        INDUSTRY_ORDER.forEach(function (k) {
-          if (k === '全部') return;
-          if (set[k]) out.push(k);
-        });
-        names.forEach(function (n) {
-          if (out.indexOf(n) === -1) out.push(n);
-        });
-        return out;
-      }
-
-      function sortTech(names) {
-        var set = {};
-        names.forEach(function (n) { set[n] = true; });
-        var out = [];
-        TECH_ORDER.forEach(function (k) {
-          if (k === '全部') return;
-          if (set[k]) out.push(k);
-        });
-        names.forEach(function (n) {
-          if (out.indexOf(n) === -1) out.push(n);
-        });
-        return out;
-      }
-
-      var grid = document.getElementById('grid');
-      var loadErr = document.getElementById('load-err');
-      var emptyHint = document.getElementById('empty-hint');
-      var navEl = document.getElementById('industry-nav');
-      var techNavEl = document.getElementById('tech-nav');
-      var techNavMobile = document.getElementById('tech-nav-mobile');
-      var allProducts = [];
-      var activeIndustry = '全部';
-      var activeTech = '全部';
-
-      function escapeHtml(s) {
-        if (!s) return '';
-        return String(s)
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;');
-      }
-      function escapeAttr(s) {
-        return escapeHtml(s).replace(/'/g, '&#39;');
-      }
-
-      function filteredProducts() {
-        var list = allProducts;
-        if (activeTech !== '全部') {
-          list = list.filter(function (p) { return p.tech_stack === activeTech; });
-        }
-        if (activeIndustry !== '全部') {
-          list = list.filter(function (p) { return p.industry === activeIndustry; });
-        }
-        return list;
-      }
-
-      function renderTechNavInto(container, vertical) {
-        var stacks = sortTech(allProducts.map(function (p) { return p.tech_stack; }));
-        var tabs = ['全部'].concat(stacks);
-        var baseBtn = vertical
-          ? 'w-full rounded-lg px-3 py-2 text-left text-sm transition '
-          : 'rounded-full px-3.5 py-1.5 text-xs font-medium transition ';
-        container.innerHTML = tabs.map(function (label) {
-          var active = label === activeTech;
-          var cls = active
-            ? 'bg-orange-500 text-white shadow-sm shadow-orange-500/25'
-            : 'bg-slate-100 text-slate-600 hover:bg-slate-200';
-          return (
-            '<button type="button" data-tech="' + escapeAttr(label) + '"' +
-            ' class="' + baseBtn + cls + '">' + escapeHtml(label) + '</button>'
-          );
-        }).join('');
-        container.querySelectorAll('button[data-tech]').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            activeTech = btn.getAttribute('data-tech') || '全部';
-            syncTechNavs();
-            renderNav();
-            renderGrid();
-          });
-        });
-      }
-
-      function syncTechNavs() {
-        renderTechNavInto(techNavEl, true);
-        renderTechNavInto(techNavMobile, false);
-      }
-
-      function renderNav() {
-        var industries = sortIndustries(allProducts.map(function (p) { return p.industry; }));
-        var tabs = ['全部'].concat(industries);
-        navEl.innerHTML = tabs.map(function (label) {
-          var active = label === activeIndustry;
-          var cls = active
-            ? 'bg-orange-500 text-white shadow-sm shadow-orange-500/25'
-            : 'bg-slate-100 text-slate-600 hover:bg-slate-200';
-          return (
-            '<button type="button" data-industry="' + escapeAttr(label) + '"' +
-            ' class="rounded-full px-3.5 py-1.5 text-xs font-medium transition ' + cls + '">' +
-            escapeHtml(label) + '</button>'
-          );
-        }).join('');
-        navEl.querySelectorAll('button[data-industry]').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            activeIndustry = btn.getAttribute('data-industry') || '全部';
-            renderNav();
-            renderGrid();
-          });
-        });
-      }
-
-      function renderGrid() {
-        var list = filteredProducts();
-        if (!list.length) {
-          grid.innerHTML = '';
-          emptyHint.classList.remove('hidden');
-          return;
-        }
-        emptyHint.classList.add('hidden');
-        grid.innerHTML = list.map(function (p) {
-          var badge = p.badge
-            ? '<span class="inline-flex rounded-lg bg-orange-50 px-2 py-0.5 text-xs font-medium text-orange-700">' + escapeHtml(p.badge) + '</span>'
-            : '';
-          var ind = '<span class="inline-flex rounded-lg bg-slate-100 px-2 py-0.5 text-xs text-slate-600">' + escapeHtml(p.industry) + '</span>';
-          var tech = '<span class="inline-flex rounded-lg bg-amber-50 px-2 py-0.5 text-xs text-amber-800">' + escapeHtml(p.tech_stack) + '</span>';
-          return (
-            '<a href="detail.html?id=' + encodeURIComponent(String(p.id)) + '"' +
-            ' class="group flex flex-col rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-4 focus:ring-orange-500/20">' +
-            '<div class="flex flex-wrap items-start justify-between gap-2">' +
-            '<h2 class="text-base font-semibold text-slate-900 group-hover:text-orange-600 transition-colors">' + escapeHtml(p.name) + '</h2>' +
-            '<div class="flex flex-wrap gap-1.5 justify-end">' + tech + ind + badge + '</div>' +
-            '</div>' +
-            '<p class="mt-3 flex-1 text-sm leading-relaxed text-slate-500">' + escapeHtml(p.description) + '</p>' +
-            '<p class="mt-4 text-xs font-medium text-orange-600">查看详情 →</p>' +
-            '</a>'
-          );
-        }).join('');
-      }
-
-      fetch(apiBase() + '/api/products', {
-        headers: { 'Authorization': 'Bearer ' + token }
-      })
-        .then(function (res) {
-          if (res.status === 401) {
-            localStorage.removeItem('portal_token');
-            localStorage.removeItem('portal_user');
-            window.location.href = 'login.html';
-            return Promise.reject(new Error('unauthorized'));
-          }
-          return res.json().then(function (data) {
-            if (!res.ok) throw new Error((data && data.detail) || '加载失败');
-            return data;
-          });
-        })
-        .then(function (products) {
-          if (!products || !products.length) {
-            allProducts = [];
-            navEl.innerHTML = '';
-            techNavEl.innerHTML = '';
-            techNavMobile.innerHTML = '';
-            emptyHint.textContent = '暂无可访问的产品。';
-            emptyHint.classList.remove('hidden');
-            return;
-          }
-          allProducts = products;
-          syncTechNavs();
-          renderNav();
-          renderGrid();
-        })
-        .catch(function (ex) {
-          if (ex.message === 'unauthorized') return;
-          loadErr.textContent = ex.message || '加载失败';
-          loadErr.classList.remove('hidden');
-        });
     })();
   </script>
-  <script src="/portal-brand.js"></script>
+  <script src="portal-demos.js"></script>
+  <script>
+    if (typeof window.renderIndexPortal === 'function') {
+      window.renderIndexPortal();
+    }
+  </script>
+
 </body>
 </html>
