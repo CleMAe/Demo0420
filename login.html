@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>登录 · 智能体Demo平台</title>
+  <title>登录</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -16,7 +16,6 @@
   </script>
 </head>
 <body class="min-h-screen bg-slate-50 text-slate-800 antialiased flex items-center justify-center p-6">
-
   <div class="w-full max-w-md">
     <div class="text-center mb-8">
       <div class="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-500 text-white text-[11px] font-bold shadow-sm shadow-orange-500/25">Demo</div>
@@ -42,10 +41,6 @@
           登录
         </button>
       </form>
-
-      <p class="mt-6 text-center text-xs text-slate-400">
-        示例账号: admin1 / P@ssw0rd
-      </p>
     </div>
   </div>
 
@@ -55,7 +50,10 @@
       var err = document.getElementById('error-msg');
 
       function apiBase() {
-        if (!window.location.host) return 'http://127.0.0.1';
+        // 必须通过 http://本机（默认 80 端口）访问；若误用 file:// 打开本地 HTML，相对路径请求会失败
+        if (!window.location.host) {
+          return 'http://127.0.0.1';
+        }
         return '';
       }
 
@@ -73,7 +71,9 @@
           .then(function (res) {
             return res.text().then(function (text) {
               var data = null;
-              try { data = text ? JSON.parse(text) : null; } catch (_) {
+              try {
+                data = text ? JSON.parse(text) : null;
+              } catch (e) {
                 throw new Error(res.ok ? '响应格式异常' : ('服务错误 (' + res.status + ')'));
               }
               if (!res.ok) {
@@ -90,7 +90,9 @@
             });
           })
           .then(function (data) {
-            if (!data || !data.token) throw new Error('登录响应缺少 Token');
+            if (!data || !data.token) {
+              throw new Error('登录响应缺少 Token');
+            }
             localStorage.setItem('portal_token', data.token);
             localStorage.setItem('portal_user', JSON.stringify(data.user));
             window.location.href = 'index.html';
@@ -102,5 +104,6 @@
       });
     })();
   </script>
+  <script src="portal-brand.js?v=20260526-docker-static"></script>
 </body>
 </html>

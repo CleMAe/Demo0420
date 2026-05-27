@@ -1,26 +1,30 @@
 services:
   api:
     build:
-      context: ..
-      dockerfile: hs/Dockerfile
-    container_name: hs-portal-api
+      context: .
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+        PIP_DEFAULT_TIMEOUT: ${PIP_DEFAULT_TIMEOUT:-120}
+    container_name: portal-api
     volumes:
       - portal-data:/data
     environment:
       JWT_SECRET: ${JWT_SECRET:-portal-dev-secret-change-in-prod}
+      PORTAL_BRAND_NAME: ${PORTAL_BRAND_NAME:-智能体Demo平台}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      DEEPSEEK_TIMEOUT: ${DEEPSEEK_TIMEOUT:-20}
     restart: unless-stopped
 
   web:
-    image: nginx:1.27-alpine
-    container_name: hs-portal-web
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: demo0420-web
+    container_name: portal-web
     ports:
-      - "8080:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./login.html:/usr/share/nginx/html/login.html:ro
-      - ./index.html:/usr/share/nginx/html/index.html:ro
-      - ./detail.html:/usr/share/nginx/html/detail.html:ro
-      - ./portal-demos.js:/usr/share/nginx/html/portal-demos.js:ro
+      - "80:80"
     depends_on:
       - api
     restart: unless-stopped

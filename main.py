@@ -34,6 +34,8 @@ PORTAL_BRAND_NAME = os.environ.get("PORTAL_BRAND_NAME", "智能体Demo平台")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 CUSTOMER_SCRIPT_PRODUCT_NAME = "客服话术优化"
+CLINICAL_PATHWAY_PRODUCT_NAME = "临床路径建议引擎"
+EMPLOYEE_TRAINING_PRODUCT_NAME = "员工自助：培训陪练"
 PROJECT_ROOT = Path(__file__).resolve().parent
 FRONTEND_ASSETS = {
     "": "index.html",
@@ -562,6 +564,60 @@ class CustomerScriptResponse(BaseModel):
     message: str = ""
 
 
+class EmployeeTrainingTurn(BaseModel):
+    role: str = Field(min_length=1, max_length=20)
+    content: str = Field(min_length=1, max_length=800)
+
+
+class EmployeeTrainingRequest(BaseModel):
+    product_id: int
+    user_message: str = Field(min_length=1, max_length=800)
+    round: int = Field(default=0, ge=0, le=30)
+    history: list[EmployeeTrainingTurn] = Field(default_factory=list)
+
+
+class EmployeeTrainingReply(BaseModel):
+    phase: str
+    role: str
+    reply: str
+    score: int | None = None
+    signals: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+
+
+class EmployeeTrainingResponse(BaseModel):
+    success: bool
+    data: EmployeeTrainingReply | None = None
+    message: str = ""
+
+
+class ClinicalPathwayRequest(BaseModel):
+    product_id: int
+    condition: str = Field(min_length=1, max_length=40)
+    stage: str = Field(min_length=1, max_length=40)
+    symptoms: str = Field(min_length=1, max_length=500)
+
+
+class ClinicalPathwaySuggestion(BaseModel):
+    condition: str
+    stage: str
+    risk_level: str
+    summary: str
+    next_steps: list[str]
+    checks: list[str]
+    medication_notes: list[str]
+    consultation: str
+    warning_signs: list[str]
+    references: list[str]
+    disclaimer: str
+
+
+class ClinicalPathwayResponse(BaseModel):
+    success: bool
+    data: ClinicalPathwaySuggestion | None = None
+    message: str = ""
+
+
 class DeepSeekConfigError(RuntimeError):
     """DeepSeek integration is not configured for this deployment."""
 
@@ -677,6 +733,164 @@ def _normalize_customer_script_suggestion(raw: dict[str, Any]) -> CustomerScript
         steps=_string_list(raw.get("steps"), ["确认问题", "表达歉意", "给出处理时限"]),
         escalation=str(raw.get("escalation") or "若客户持续强烈投诉，升级给主管处理。").strip(),
         forbidden_words=_string_list(raw.get("forbidden_words"), ["这不是我们的问题", "你自己看规则"]),
+    )
+
+
+def build_employee_training_reply(
+    user_message: str,
+    round_no: int,
+    history: list[EmployeeTrainingTurn],
+) -> EmployeeTrainingReply:
+    text = user_message.strip()
+    lower = text.lower()
+    history_text = " ".join(turn.content for turn in history[-8:])
+    combined = f"{history_text} {text}".lower()
+
+    compliance_ok = any(
+        word in combined
+        for word in ("合规", "合同", "书面", "不能", "无法承诺", "不私下", "poc", "正式流程")
+    )
+    value_signal = any(
+        word in combined
+        for word in ("价值", "roi", "tco", "案例", "数据", "sla", "运维", "风险共担")
+    )
+    price_only = any(word in combined for word in ("降价", "打折", "便宜", "回扣"))
+
+    if "/end" in lower:
+        score = 55
+        signals: list[str] = []
+        suggestions: list[str] = []
+        if value_signal:
+            score += 20
+            signals.append("使用价值锚点回应价格异议")
+        else:
+            suggestions.append("价格异议中补充 ROI/TCO、客户案例或 SLA 保障")
+        if compliance_ok:
+            score += 20
+            signals.append("明确拒绝私下承诺并回到正式流程")
+        else:
+            suggestions.append("遇到保底、回扣、口头承诺时先明确合规边界")
+        if price_only:
+            score -= 15
+            suggestions.append("避免把谈判带入单纯降价或回扣表达")
+        score = max(0, min(100, score))
+        risk = "绿灯" if compliance_ok else "红线高危"
+        reply = (
+            "### 演练结束！AI 教练复盘报告\n"
+            f"- 综合评分：{score} / 100\n"
+            f"- 合规风险：{risk}\n"
+            f"- 命中要点：{'、'.join(signals) if signals else '暂未识别到关键优势话术'}\n"
+            f"- 优化建议：{'；'.join(suggestions) if suggestions else '继续保持价值表达和合规边界'}\n"
+            "- 推荐话术：李总，效果我们建议通过正式 PoC 和合同条款验证，所有承诺都写入书面文件，"
+            "这既保护贵司权益，也保证双方合作边界清晰。"
+        )
+        return EmployeeTrainingReply(
+            phase="report",
+            role="coach",
+            reply=reply,
+            score=score,
+            signals=signals,
+            suggestions=suggestions,
+        )
+
+    if round_no <= 1:
+        reply = "你们方案听起来不错，但竞品报价比你们低 15%。如果你只能讲概念，我很难往下推进。"
+    elif not compliance_ok and any(word in combined for word in ("效果", "保证", "承诺", "保底", "kpi")):
+        reply = "那你私下给我保个底吧，效果达不到就全额退款，这个不用写合同里。你能不能点头？"
+    elif compliance_ok:
+        reply = "行，至少你没有乱承诺。那你把 PoC 验证范围、成功指标和合同条款边界整理出来，我再让团队评估。"
+    elif value_signal:
+        reply = "价值账我听懂了一点，但你还没解释清楚失败风险怎么兜底。别只讲好处，讲讲边界。"
+    else:
+        reply = "这回答还是偏虚。你得具体说清楚能省多少钱、怎么验证，以及哪些承诺不能做。"
+
+    suggestions = ["用客户业务指标表达价值", "把效果验证落到 PoC 或书面合同", "遇到私下承诺要明确拒绝"]
+    return EmployeeTrainingReply(
+        phase="roleplay",
+        role="customer",
+        reply=reply,
+        signals=[signal for signal, ok in (("价值锚点", value_signal), ("合规边界", compliance_ok)) if ok],
+        suggestions=suggestions,
+    )
+
+
+def _clinical_pathway_risk_level(text: str) -> str:
+    high_risk_words = ("休克", "意识障碍", "呼吸困难", "胸痛", "低氧", "抽搐", "昏迷", "大出血")
+    medium_risk_words = ("高热", "持续呕吐", "脱水", "黄疸", "剧痛", "感染", "血压升高")
+    if any(word in text for word in high_risk_words):
+        return "高危"
+    if any(word in text for word in medium_risk_words):
+        return "中危"
+    return "常规"
+
+
+def build_clinical_pathway_suggestion(
+    condition: str,
+    stage: str,
+    symptoms: str,
+) -> ClinicalPathwaySuggestion:
+    condition_text = condition.strip()
+    stage_text = stage.strip()
+    symptom_text = symptoms.strip()
+    risk_level = _clinical_pathway_risk_level(f"{condition_text} {stage_text} {symptom_text}")
+
+    templates: dict[str, dict[str, list[str] | str]] = {
+        "肺炎": {
+            "checks": ["血常规与 CRP/PCT", "胸部影像复核", "血氧饱和度监测", "病原学采样（痰培养/核酸按院内规范）"],
+            "steps": ["评估 CURB-65 或同类风险分层", "确认氧疗与液体管理需求", "根据院内抗感染路径选择经验治疗", "48-72 小时复评症状、体温和影像趋势"],
+            "meds": ["抗感染用药需结合过敏史、肝肾功能和本院耐药谱", "避免在未评估病原与严重程度时机械升级抗生素"],
+            "consult": "出现低氧、休克或多器官受累时，建议呼吸科/重症医学科会诊。",
+            "refs": ["社区获得性肺炎诊疗指南（演示引用）", "院内抗菌药物分级管理路径（演示引用）"],
+        },
+        "糖尿病": {
+            "checks": ["空腹/餐后血糖与 HbA1c", "尿酮体或血酮（必要时）", "肾功能与尿微量白蛋白", "足部与眼底风险筛查"],
+            "steps": ["确认血糖控制目标和低血糖风险", "梳理饮食、运动、用药依从性", "按分层路径调整降糖方案", "安排随访并记录居家监测频率"],
+            "meds": ["降糖药调整需结合肾功能、体重和低血糖风险", "胰岛素方案必须由医生结合监测结果个体化确定"],
+            "consult": "疑似酮症酸中毒、严重低血糖或慢性并发症进展时，建议内分泌专科会诊。",
+            "refs": ["2 型糖尿病基层诊疗指南（演示引用）", "慢病随访管理规范（演示引用）"],
+        },
+        "急性腹痛": {
+            "checks": ["生命体征与腹部体征复查", "血常规、肝肾功能、电解质与淀粉酶/脂肪酶", "尿常规及妊娠相关筛查（适用时）", "腹部超声或 CT 按急诊规范评估"],
+            "steps": ["先排除外科急腹症和失血性风险", "建立禁食、补液与疼痛评估记录", "依据定位体征推进影像和专科评估", "明确观察节点与复诊/留观标准"],
+            "meds": ["镇痛和抗感染处理应避免掩盖需急诊手术的体征", "用药前确认过敏史、妊娠可能和肝肾功能"],
+            "consult": "腹膜刺激征、进行性加重或生命体征不稳时，建议普外科/急诊外科立即评估。",
+            "refs": ["急性腹痛急诊处理路径（演示引用）", "围手术期评估规范（演示引用）"],
+        },
+    }
+    template = templates.get(condition_text) or {
+        "checks": ["生命体征复核", "基础实验室检查", "关键症状结构化记录", "必要时完善影像或专科检查"],
+        "steps": ["确认主诉、病程和既往史", "按严重程度进行分层", "匹配院内标准路径并标记缺失信息", "制定随访和复评时间点"],
+        "meds": ["所有用药建议需由执业医师结合禁忌证确认", "避免仅凭单一症状给出处方结论"],
+        "consult": "如存在诊断不清、病情进展或跨专科问题，建议发起专科会诊。",
+        "refs": ["院内临床路径库（演示引用）", "公开诊疗指南摘要（演示引用）"],
+    }
+
+    next_steps = list(template["steps"])
+    if risk_level == "高危":
+        next_steps.insert(0, "立即复核 ABCDE、生命体征与抢救资源可用性")
+    elif risk_level == "中危":
+        next_steps.insert(0, "优先补齐风险分层所需的关键检查与复评时间点")
+
+    warning_signs = ["生命体征不稳定", "症状短时间快速加重", "出现意识改变或低氧表现"]
+    if condition_text == "急性腹痛":
+        warning_signs.append("腹膜刺激征或持续性剧痛")
+    elif condition_text == "肺炎":
+        warning_signs.append("血氧下降或呼吸频率明显增快")
+    elif condition_text == "糖尿病":
+        warning_signs.append("血糖极端异常、酮体阳性或反复低血糖")
+
+    return ClinicalPathwaySuggestion(
+        condition=condition_text,
+        stage=stage_text,
+        risk_level=risk_level,
+        summary=f"已基于“{condition_text} / {stage_text}”和当前症状摘要生成演示路径，风险分层为{risk_level}。",
+        next_steps=next_steps,
+        checks=list(template["checks"]),
+        medication_notes=list(template["meds"]),
+        consultation=str(template["consult"]),
+        warning_signs=warning_signs,
+        references=list(template["refs"]),
+        disclaimer="本结果为课程 Demo 模拟建议，不构成医疗诊断或处方，必须由执业医师结合患者实际情况复核。",
     )
 
 
@@ -888,6 +1102,54 @@ def suggest_customer_script(
     if not isinstance(suggestion, CustomerScriptSuggestion):
         suggestion = _normalize_customer_script_suggestion(suggestion)
     return CustomerScriptResponse(success=True, data=suggestion)
+
+
+@app.post("/api/employee-training/respond", response_model=EmployeeTrainingResponse)
+def respond_employee_training(
+    body: EmployeeTrainingRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> EmployeeTrainingResponse:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (body.product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != EMPLOYEE_TRAINING_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+
+    reply = build_employee_training_reply(body.user_message, body.round, body.history)
+    return EmployeeTrainingResponse(success=True, data=reply)
+
+
+@app.post("/api/clinical-pathway/suggest", response_model=ClinicalPathwayResponse)
+def suggest_clinical_pathway(
+    body: ClinicalPathwayRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> ClinicalPathwayResponse:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (body.product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != CLINICAL_PATHWAY_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+
+    suggestion = build_clinical_pathway_suggestion(
+        body.condition,
+        body.stage,
+        body.symptoms,
+    )
+    return ClinicalPathwayResponse(success=True, data=suggestion)
 
 
 @app.get("/health")

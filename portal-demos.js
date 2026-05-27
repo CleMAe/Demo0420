@@ -1,669 +1,1633 @@
 /**
- * hs/portal-demos.js
- * 核心逻辑：产品卡片渲染、详情页初始化、多轮对话聊天。
- * 配合 main.py API 设计与 hs/products.py 种子数据。
+ * 详情页交互演示沙箱：纯前端模拟，与门户 Tailwind 风格一致。
+ * 按产品 name 精确匹配；否则按 tech_stack 回退。
  */
 (function () {
-  'use strict';
-
-  // =========================================================================
-  // 工具函数
-  // =========================================================================
-
   function escapeHtml(s) {
-    if (!s) return '';
+    if (!s) return "";
     return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
   }
 
-  function escapeAttr(s) {
-    return escapeHtml(s).replace(/'/g, '&#39;');
-  }
-
-  function apiBase() {
-    if (!window.location.host) return 'http://127.0.0.1';
-    return '';
-  }
-
-  function getToken() {
-    return localStorage.getItem('portal_token');
-  }
-
-  function authHeaders() {
-    return { 'Authorization': 'Bearer ' + getToken() };
-  }
-
-  function handleAuthError(status) {
-    if (status === 401) {
-      localStorage.removeItem('portal_token');
-      localStorage.removeItem('portal_user');
-      window.location.href = 'login.html';
-      return true;
-    }
-    return false;
-  }
-
-  function spinHtml() {
-    return '<span class="inline-flex h-4 w-4 animate-spin rounded-full border-2 border-orange-500 border-t-transparent" aria-hidden="true"></span>';
-  }
-
-  // =========================================================================
-  // Markdown 渲染（轻量级，无外部依赖）
-  // =========================================================================
-
-  function renderMarkdown(md) {
-    if (!md) return '';
-    var html = md;
-
-    // 标题（必须在换行转换之前处理）
-    html = html.replace(/^#### (.+)$/gm, '<h4 class="text-sm font-semibold text-slate-800 mt-3 mb-1">$1</h4>');
-    html = html.replace(/^### (.+)$/gm, '<h3 class="text-base font-semibold text-slate-900 mt-4 mb-2">$1</h3>');
-    html = html.replace(/^## (.+)$/gm, '<h2 class="text-lg font-bold text-slate-900 mt-5 mb-2">$1</h2>');
-    html = html.replace(/^# (.+)$/gm, '<h1 class="text-xl font-bold text-slate-900 mt-6 mb-3">$1</h1>');
-
-    // 粗体
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-slate-900">$1</strong>');
-
-    // 行内代码
-    html = html.replace(/`([^`]+)`/g, '<code class="rounded bg-slate-100 px-1 py-0.5 text-xs font-mono text-orange-700">$1</code>');
-
-    // 列表项
-    html = html.replace(/^  - (.+)$/gm, '<li class="ml-8 list-disc text-sm text-slate-700 my-1">$1</li>');
-    html = html.replace(/^- (.+)$/gm, '<li class="ml-4 list-disc text-sm text-slate-700 my-1">$1</li>');
-
-    // 编号列表
-    html = html.replace(/^(\d+)\. (.+)$/gm, '<li class="ml-4 list-decimal text-sm text-slate-700 my-1"><span class="font-medium">$1.</span> $2</li>');
-
-    // 分隔线
-    html = html.replace(/^---$/gm, '<hr class="my-4 border-slate-200"/>');
-
-    // 换行
-    html = html.replace(/\n/g, '<br/>');
-
-    // emoji 与状态标签高亮
-    html = html.replace(/🛑/g, '<span class="text-red-600 text-lg">🛑</span>');
-    html = html.replace(/✅/g, '<span class="text-emerald-600">✅</span>');
-    html = html.replace(/❌/g, '<span class="text-red-600 font-semibold">❌</span>');
-    html = html.replace(/⚠️/g, '<span class="text-amber-600 font-semibold">⚠️</span>');
-    html = html.replace(/✨/g, '<span class="text-amber-500">✨</span>');
-    html = html.replace(/📊/g, '<span class="text-blue-600">📊</span>');
-    html = html.replace(/🔍/g, '<span class="text-purple-600">🔍</span>');
-    html = html.replace(/绿灯/g, '<span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">🟢 绿灯</span>');
-    html = html.replace(/黄灯/g, '<span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">🟡 黄灯</span>');
-    html = html.replace(/红线高危/g, '<span class="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">🔴 红线高危</span>');
-
-    return html;
-  }
-
-  // =========================================================================
-  // 1. renderIndexPortal() —— 获取后端产品并动态渲染卡片
-  // =========================================================================
-
-  var INDUSTRY_ORDER = ['全部', '金融', '医疗', '科技', '跨行业通用', '研发与运维', '客户与增长', '管理战略'];
-  var TECH_ORDER = [
-    '全部', '大模型与 RAG', '代码与 IDE 智能', 'NLP 与文档智能', '机器学习与风控建模',
-    '计算机视觉', 'AIOps 与日志智能', '对话式 AI', '智能体编排与网关', '数据分析与可视化'
-  ];
-
-  function sortIndustries(names) {
-    var set = {};
-    names.forEach(function (n) { set[n] = true; });
-    var out = [];
-    INDUSTRY_ORDER.forEach(function (k) {
-      if (k === '全部') return;
-      if (set[k]) out.push(k);
-    });
-    names.forEach(function (n) {
-      if (out.indexOf(n) === -1) out.push(n);
-    });
-    return out;
-  }
-
-  function sortTech(names) {
-    var set = {};
-    names.forEach(function (n) { set[n] = true; });
-    var out = [];
-    TECH_ORDER.forEach(function (k) {
-      if (k === '全部') return;
-      if (set[k]) out.push(k);
-    });
-    names.forEach(function (n) {
-      if (out.indexOf(n) === -1) out.push(n);
-    });
-    return out;
-  }
-
-  window.renderIndexPortal = function () {
-    var token = getToken();
-    if (!token) {
-      window.location.href = 'login.html';
-      return;
-    }
-
-    var grid = document.getElementById('grid');
-    var loadErr = document.getElementById('load-err');
-    var emptyHint = document.getElementById('empty-hint');
-    var navEl = document.getElementById('industry-nav');
-    var techNavEl = document.getElementById('tech-nav');
-    var techNavMobile = document.getElementById('tech-nav-mobile');
-
-    if (!grid) return;
-
-    var allProducts = [];
-    var activeIndustry = '全部';
-    var activeTech = '全部';
-
-    function filteredProducts() {
-      var list = allProducts;
-      if (activeTech !== '全部') {
-        list = list.filter(function (p) { return p.tech_stack === activeTech; });
-      }
-      if (activeIndustry !== '全部') {
-        list = list.filter(function (p) { return p.industry === activeIndustry; });
-      }
-      return list;
-    }
-
-    function renderTechNavInto(container, vertical) {
-      if (!container) return;
-      var stacks = sortTech(allProducts.map(function (p) { return p.tech_stack; }));
-      var tabs = ['全部'].concat(stacks);
-      var baseBtn = vertical
-        ? 'w-full rounded-lg px-3 py-2 text-left text-sm transition '
-        : 'rounded-full px-3.5 py-1.5 text-xs font-medium transition ';
-      container.innerHTML = tabs.map(function (label) {
-        var active = label === activeTech;
-        var cls = active
-          ? 'bg-orange-500 text-white shadow-sm shadow-orange-500/25'
-          : 'bg-slate-100 text-slate-600 hover:bg-slate-200';
-        return (
-          '<button type="button" data-tech="' + escapeAttr(label) + '"' +
-          ' class="' + baseBtn + cls + '">' + escapeHtml(label) + '</button>'
-        );
-      }).join('');
-      container.querySelectorAll('button[data-tech]').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-          activeTech = btn.getAttribute('data-tech') || '全部';
-          syncTechNavs();
-          renderNav();
-          renderGrid();
-        });
-      });
-    }
-
-    function syncTechNavs() {
-      renderTechNavInto(techNavEl, true);
-      renderTechNavInto(techNavMobile, false);
-    }
-
-    function renderNav() {
-      if (!navEl) return;
-      var industries = sortIndustries(allProducts.map(function (p) { return p.industry; }));
-      var tabs = ['全部'].concat(industries);
-      navEl.innerHTML = tabs.map(function (label) {
-        var active = label === activeIndustry;
-        var cls = active
-          ? 'bg-orange-500 text-white shadow-sm shadow-orange-500/25'
-          : 'bg-slate-100 text-slate-600 hover:bg-slate-200';
-        return (
-          '<button type="button" data-industry="' + escapeAttr(label) + '"' +
-          ' class="rounded-full px-3.5 py-1.5 text-xs font-medium transition ' + cls + '">' +
-          escapeHtml(label) + '</button>'
-        );
-      }).join('');
-      navEl.querySelectorAll('button[data-industry]').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-          activeIndustry = btn.getAttribute('data-industry') || '全部';
-          renderNav();
-          renderGrid();
-        });
-      });
-    }
-
-    function renderGrid() {
-      var list = filteredProducts();
-      if (!list.length) {
-        grid.innerHTML = '';
-        if (emptyHint) emptyHint.classList.remove('hidden');
-        return;
-      }
-      if (emptyHint) emptyHint.classList.add('hidden');
-      grid.innerHTML = list.map(function (p) {
-        var badge = p.badge
-          ? '<span class="inline-flex rounded-lg bg-orange-50 px-2 py-0.5 text-xs font-medium text-orange-700">' + escapeHtml(p.badge) + '</span>'
-          : '';
-        var ind = '<span class="inline-flex rounded-lg bg-slate-100 px-2 py-0.5 text-xs text-slate-600">' + escapeHtml(p.industry) + '</span>';
-        var tech = '<span class="inline-flex rounded-lg bg-amber-50 px-2 py-0.5 text-xs text-amber-800">' + escapeHtml(p.tech_stack) + '</span>';
-        return (
-          '<a href="detail.html?id=' + encodeURIComponent(String(p.id)) + '"' +
-          ' class="group flex flex-col rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-4 focus:ring-orange-500/20">' +
-          '<div class="flex flex-wrap items-start justify-between gap-2">' +
-          '<h2 class="text-base font-semibold text-slate-900 group-hover:text-orange-600 transition-colors">' + escapeHtml(p.name) + '</h2>' +
-          '<div class="flex flex-wrap gap-1.5 justify-end">' + tech + ind + badge + '</div>' +
-          '</div>' +
-          '<p class="mt-3 flex-1 text-sm leading-relaxed text-slate-500">' + escapeHtml(p.description) + '</p>' +
-          '<p class="mt-4 text-xs font-medium text-orange-600">查看详情 →</p>' +
-          '</a>'
-        );
-      }).join('');
-    }
-
-    fetch(apiBase() + '/api/products', {
-      headers: authHeaders()
-    })
-      .then(function (res) {
-        if (handleAuthError(res.status)) return Promise.reject(new Error('unauthorized'));
-        return res.json().then(function (data) {
-          if (!res.ok) throw new Error((data && data.detail) || '加载失败');
-          return data;
-        });
-      })
-      .then(function (products) {
-        if (!products || !products.length) {
-          allProducts = [];
-          if (navEl) navEl.innerHTML = '';
-          if (techNavEl) techNavEl.innerHTML = '';
-          if (techNavMobile) techNavMobile.innerHTML = '';
-          if (emptyHint) {
-            emptyHint.textContent = '暂无可访问的产品。';
-            emptyHint.classList.remove('hidden');
-          }
-          return;
-        }
-        allProducts = products;
-        syncTechNavs();
-        renderNav();
-        renderGrid();
-      })
-      .catch(function (ex) {
-        if (ex.message === 'unauthorized') return;
-        if (loadErr) {
-          loadErr.textContent = ex.message || '加载失败';
-          loadErr.classList.remove('hidden');
-        }
-      });
-  };
-
-  // =========================================================================
-  // 2. initDetailPage() —— 初始化详情页与聊天界面
-  // =========================================================================
-
-  window.initDetailPage = function () {
-    var token = getToken();
-    if (!token) {
-      window.location.href = 'login.html';
-      return;
-    }
-
-    var params = new URLSearchParams(window.location.search);
-    var id = params.get('id');
-    var loadErr = document.getElementById('load-err');
-    var content = document.getElementById('content');
-
-    if (!id) {
-      if (loadErr) {
-        loadErr.textContent = '缺少产品 id';
-        loadErr.classList.remove('hidden');
-      }
-      return;
-    }
-
-    fetch(apiBase() + '/api/products/' + encodeURIComponent(id), {
-      headers: authHeaders()
-    })
-      .then(function (res) {
-        if (handleAuthError(res.status)) return Promise.reject(new Error('unauthorized'));
-        return res.json().then(function (data) {
-          if (!res.ok) throw new Error((data && data.detail) || '加载失败');
-          return data;
-        });
-      })
-      .then(function (p) {
-        document.getElementById('title').textContent = p.name;
-        document.getElementById('subtitle').textContent = p.description;
-
-        var badges = document.getElementById('badges');
-        var parts = [
-          '<span class="inline-flex rounded-lg bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900">' + escapeHtml(p.tech_stack || '') + '</span>',
-          '<span class="inline-flex rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">' + escapeHtml(p.industry) + '</span>'
-        ];
-        if (p.badge) {
-          parts.push('<span class="inline-flex rounded-lg bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700">' + escapeHtml(p.badge) + '</span>');
-        }
-        badges.innerHTML = parts.join('');
-
-        var body = document.getElementById('detail-body');
-        var paras = (p.detail_intro || '').split(/\n\n+/).map(function (x) { return x.trim(); }).filter(Boolean);
-        if (!paras.length) {
-          paras = [p.description];
-        }
-        body.innerHTML = paras.map(function (t) {
-          return '<p>' + escapeHtml(t).replace(/\n/g, '<br/>') + '</p>';
-        }).join('');
-
-        var link = document.getElementById('open-external');
-        var externalUrl = (p.url && String(p.url).trim()) || '';
-        if (externalUrl) {
-          link.href = externalUrl;
-          link.classList.remove('hidden');
-        } else {
-          link.removeAttribute('href');
-          link.classList.add('hidden');
-        }
-
-        window.__detailProduct = p;
-
-        var demoRoot = document.getElementById('demo-sandbox-mount');
-        if (demoRoot) {
-          if (p.name === '员工自助：培训陪练') {
-            mountChatInterface(demoRoot, p);
-          } else if (window.PortalDemos && typeof window.PortalDemos.mount === 'function') {
-            window.PortalDemos.mount(demoRoot, p);
-          }
-        }
-
-        if (content) content.classList.remove('hidden');
-      })
-      .catch(function (ex) {
-        if (ex.message === 'unauthorized') return;
-        if (loadErr) {
-          loadErr.textContent = ex.message || '加载失败';
-          loadErr.classList.remove('hidden');
-        }
-      });
-  };
-
-  // =========================================================================
-  // 3. 聊天界面挂载 & sendChatMessage() —— 多轮对话引擎
-  // =========================================================================
-
-  var chatState = {
-    messages: [],
-    phase: 'roleplay',
-    round: 0,
-    challenge1Done: false,
-    challenge2Done: false
-  };
-
-  var CLIENT_REPLIES = {
-    greet: [
-      '李总您好，我是本次的产品顾问。今天想跟您聊聊我们的企业解决方案，看是否能帮到贵公司的业务。',
-      '李总好！久仰大名，今天终于有机会当面请教。我们最近有个新方案非常适合您这个体量的企业。'
-    ],
-    pricePushback: [
-      '李总，我理解价格是重要考量。不过我们的方案包含三年的持续运维和专属顾问，折算下来日均成本其实比竞品还低。',
-      '确实，单看单价我们不是最便宜的。但如果您算上培训、定制和 SLA 保障，我们的 TCO 其实更有优势。'
-    ],
-    complianceTrap: [
-      '李总，这个我没办法承诺。我们公司有严格的合规红线，所有条款都白纸黑字写在合同里，这也是对您权益的保障。',
-      '李总，效果我们可以用数据和案例说话，但任何形式的私下承诺都是违规的。我建议我们走正式的 PoC 流程来验证。'
-    ],
-    other: [
-      '明白，让我针对您关心的这一点展开说一下……',
-      '好的，我记录下来了，回头让技术同事出一个更详细的方案给您。'
-    ]
-  };
-
-  var AI_REPLIES = {
-    greet: [
-      '哦？又是来推销的。行吧，给你五分钟，说说你们能帮我解决什么实际问题。',
-      '你们这行我见多了，别给我画大饼。直接说干货，到底能帮我省多少钱、提多少效？'
-    ],
-    afterPrice: [
-      '说得倒是好听。但我问过你们竞品，人家报的价格比你低 15%，功能我看也没差多少。你怎么说服我？',
-      '三年运维？谁知道你们三年后还在不在。我宁愿要个实打实的一口价，别跟我扯长期主义。'
-    ],
-    priceTrap: [
-      '行，价格的事先放放。我就问你一句实在话——你能不能私下给我保个底，效果达不到全额退款？这个不用写进合同。',
-      '既然你对自己的产品这么有信心，那这样，你给我个口头承诺，达不到 KPI 你个人负责。怎么样，敢不敢接？'
-    ],
-    afterCompliance: [
-      '哼，倒是挺有原则。那这样，我也不为难你，你给我出个详细方案，下周我们再聊。',
-      '行，算你过关。不过我还是会货比三家。方案发我邮箱，我让技术总监也看看。'
-    ],
-    fallback: [
-      '嗯……说得有点虚啊。能不能具体点？',
-      '我听着呢，继续。',
-      '你这话术我听过至少十遍了，有没有新东西？'
-    ]
-  };
-
-  function pickRandom(arr) {
-    return arr[Math.floor(Math.random() * arr.length)];
-  }
-
-  function mountChatInterface(root, product) {
-    chatState = {
-      messages: [],
-      phase: 'roleplay',
-      round: 0,
-      challenge1Done: false,
-      challenge2Done: false
-    };
-
-    root.innerHTML =
+  function shell(title, innerHtml) {
+    return (
       '<div class="mt-10 rounded-2xl border border-slate-200/80 bg-slate-50/50 p-1">' +
       '<div class="rounded-xl bg-white p-5 shadow-sm sm:p-6">' +
       '<div class="mb-5 flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">' +
       '<div class="min-w-0">' +
-      '<p class="text-xs font-semibold uppercase tracking-wide text-slate-400">合规陪练舱</p>' +
-      '<h2 class="mt-1 text-lg font-semibold tracking-tight text-slate-900">对话式销售/合规陪练</h2>' +
-      '<p class="mt-1 text-xs leading-relaxed text-slate-500">你将面对刁钻客户"李总"，输入 <code class="rounded bg-slate-100 px-1 text-orange-600">/end</code> 结束演练并获取 AI 教练复盘报告。</p>' +
-      '</div>' +
+      '<p class="text-xs font-semibold uppercase tracking-wide text-slate-400">交互演示</p>' +
+      '<h2 class="mt-1 text-lg font-semibold tracking-tight text-slate-900">' +
+      escapeHtml(title) +
+      "</h2>" +
+      '<p class="mt-1 text-xs leading-relaxed text-slate-500">以下为前端模拟数据与流程，用于场景化预览，不代表线上真实模型与接口。</p>' +
+      "</div>" +
       '<span class="shrink-0 rounded-lg bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700">模拟沙箱</span>' +
-      '</div>' +
+      "</div>" +
+      innerHtml +
+      "</div></div>"
+    );
+  }
 
-      '<div data-slot="chat-log" class="mb-4 max-h-80 space-y-3 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm">' +
-      '<div class="flex gap-2">' +
-      '<span class="mt-0.5 shrink-0 rounded-full bg-slate-300 px-1.5 py-0.5 text-[10px] font-bold text-white">李</span>' +
-      '<div class="min-w-0 rounded-xl rounded-tl-sm bg-white px-3 py-2 text-slate-700 shadow-sm">' + escapeHtml(pickRandom(AI_REPLIES.greet)) + '</div>' +
-      '</div>' +
-      '</div>' +
+  function spinHtml() {
+    return (
+      '<span class="inline-flex h-4 w-4 animate-spin rounded-full border-2 border-orange-500 border-t-transparent" aria-hidden="true"></span>'
+    );
+  }
 
-      '<div class="flex gap-2">' +
-      '<input type="text" data-field="chat-input" placeholder="输入你的回应…（输入 /end 结束演练）" ' +
+  function bind(root, selector, event, handler) {
+    var el = root.querySelector(selector);
+    if (el) el.addEventListener(event, handler);
+  }
+
+  function apiBase() {
+    if (!window.location.host) return "http://127.0.0.1";
+    return "";
+  }
+
+  function authHeaders(extra) {
+    var headers = extra || {};
+    var token = localStorage.getItem("portal_token");
+    if (token) headers.Authorization = "Bearer " + token;
+    return headers;
+  }
+
+  // --- 按产品名称 ---
+
+  function demoEnterpriseGpt(root) {
+    root.innerHTML = shell("企业知识检索（RAG）", (
+      '<div class="space-y-4">' +
+      '<label class="block text-xs font-medium text-slate-600">向内部知识库提问</label>' +
+      '<div class="flex flex-col gap-2 sm:flex-row">' +
+      '<input type="text" data-field="q" value="新员工如何申请年假？" ' +
       'class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-2.5 text-sm outline-none ring-orange-500/20 transition focus:border-orange-500 focus:bg-white focus:ring-4" />' +
-      '<button type="button" data-action="chat-send" ' +
-      'class="rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600">发送</button>' +
+      '<button type="button" data-action="ask" ' +
+      'class="rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600">' +
+      "模拟检索" +
+      "</button></div>" +
+      '<div data-slot="out" class="hidden rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm leading-relaxed text-slate-700"></div>' +
+      "</div>"
+    ));
+    bind(root, "[data-action=\"ask\"]", "click", function () {
+      var inp = root.querySelector("[data-field=\"q\"]");
+      var out = root.querySelector("[data-slot=\"out\"]");
+      var q = inp ? inp.value.trim() : "";
+      out.classList.remove("hidden");
+      out.innerHTML =
+        '<p class="mb-3 flex items-center gap-2 text-xs text-slate-500">' + spinHtml() + " 正在检索制度库…</p>";
+      setTimeout(function () {
+        out.innerHTML =
+          '<p class="font-medium text-slate-900">摘要回答</p>' +
+          '<p class="mt-2">根据《员工手册》<strong class="font-medium text-orange-600">第 3.2 节</strong>，年假需提前在 OA 提交申请，' +
+          "经直属主管审批；当年额度按司龄折算。以下引用片段可点击展开核对（模拟）。</p>" +
+          '<div class="mt-3 flex flex-wrap gap-2">' +
+          '<button type="button" class="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900 transition hover:bg-amber-100">引用 · 员工手册 3.2</button>' +
+          '<button type="button" class="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900 transition hover:bg-amber-100">引用 · OA 流程说明</button>' +
+          "</div>" +
+          '<p class="mt-3 text-xs text-slate-500">问题：' + escapeHtml(q || "（空）") + "</p>";
+      }, 700);
+    });
+  }
+
+  function demoCopilot(root) {
+    root.innerHTML = shell("IDE 内联补全（模拟）", (
+      '<div class="rounded-xl border border-slate-200 bg-slate-900 p-4 font-mono text-xs text-slate-100">' +
+      "<pre class=\"whitespace-pre-wrap\">def fetch_user(uid: str) -&gt; dict:\n" +
+      "    \"\"\"从缓存读取用户\"\"\"\n" +
+      "    key = f\"user:{uid}\"\n" +
+      "<span data-slot=\"ghost\" class=\"text-slate-500\"></span></pre>" +
+      '<button type="button" data-action="complete" class="mt-3 rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600">' +
+      "生成补全" +
+      "</button></div>"
+    ));
+    bind(root, "[data-action=\"complete\"]", "click", function () {
+      var g = root.querySelector("[data-slot=\"ghost\"]");
+      g.textContent = "    return cache.get(key) or load_from_db(uid)";
+      g.className = "text-emerald-400/90";
+    });
+  }
+
+  function demoCompliance(root) {
+    root.innerHTML = shell("条款风险初筛", (
+      '<ul class="space-y-3 text-sm">' +
+      '<li class="rounded-xl border border-slate-200 bg-white p-3" data-clause="1">甲方可在<strong class="text-slate-900">不事先通知</strong>的情况下调整服务价格。</li>' +
+      '<li class="rounded-xl border border-slate-200 bg-white p-3" data-clause="2">乙方对因不可抗力造成的损失<strong class="text-slate-900">承担全部赔偿责任</strong>。</li>' +
+      '<li class="rounded-xl border border-slate-200 bg-white p-3" data-clause="3">争议提交<strong class="text-slate-900">甲方所在地</strong>法院专属管辖。</li>' +
+      "</ul>" +
+      '<button type="button" data-action="scan" class="mt-4 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-orange-600">' +
+      "运行模拟扫描" +
+      "</button>"
+    ));
+    bind(root, "[data-action=\"scan\"]", "click", function () {
+      var items = root.querySelectorAll("[data-clause]");
+      items.forEach(function (li, i) {
+        var risks = ["偏离模板：单方调价权过宽", "权责不对等：不可抗力全赔", "管辖条款：需复核是否可接受"];
+        li.innerHTML =
+          li.textContent +
+          ' <span class="mt-2 inline-flex rounded-lg bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">' +
+          escapeHtml(risks[i]) +
+          "</span>";
+      });
+    });
+  }
+
+  function demoFinReport(root) {
+    root.innerHTML = shell("金融研报生成器（模拟 Demo）", (
+      '<div class="grid gap-4 sm:grid-cols-3">' +
+      '<div><label class="text-xs font-medium text-slate-600">主题</label>' +
+      '<select data-field="topic" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      "<option>消费电子 · 季度景气</option>" +
+      "<option>银行板块 · 息差展望</option>" +
+      "<option>新能源 · 出海趋势</option>" +
+      "<option>医药生物 · 创新管线</option>" +
+      "</select></div>" +
+      '<div><label class="text-xs font-medium text-slate-600">行业</label>' +
+      '<select data-field="industry" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      "<option>消费电子</option>" +
+      "<option>银行</option>" +
+      "<option>新能源</option>" +
+      "<option>医药生物</option>" +
+      "</select></div>" +
+      '<div><label class="text-xs font-medium text-slate-600">篇幅</label>' +
+      '<select data-field="len" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      "<option>简版（3 段）</option>" +
+      "<option>标准（6 段）</option>" +
+      "<option>详细（10 段）</option>" +
+      "</select></div></div>" +
+      '<button type="button" data-action="gen" class="mt-4 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">生成模拟草稿</button>' +
+      '<div data-slot="doc" class="mt-4 hidden space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"></div>'
+    ));
+    bind(root, "[data-action=\"gen\"]", "click", function () {
+      var doc = root.querySelector("[data-slot=\"doc\"]");
+      var topic = root.querySelector("[data-field=\"topic\"]").value;
+      var ind = root.querySelector("[data-field=\"industry\"]").value;
+      var isLong = root.querySelector("[data-field=\"len\"]").value.indexOf("详细") >= 0;
+      doc.classList.remove("hidden");
+      doc.innerHTML = '<div class="flex items-center gap-2 text-xs text-slate-500"><div class="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-orange-500"></div>生成中…</div>';
+      setTimeout(function () {
+        var extra = isLong ? (
+          '<p class="mt-3 rounded border-l-4 border-slate-300 bg-white py-2 pl-3 pr-2">' +
+          '<span class="font-medium text-slate-900">[模拟段落 1 · 行业综述]</span><br>' +
+          escapeHtml(ind) + "行业在报告期内保持稳健增长，头部企业集中度进一步提升。渠道库存水平回归健康区间，" +
+          "成本端原材料价格回落为毛利改善提供了空间。展望下半年，需求端有望受政策与新品周期双重驱动。" +
+          '</p>' +
+          '<p class="mt-2 rounded border-l-4 border-slate-300 bg-white py-2 pl-3 pr-2">' +
+          '<span class="font-medium text-slate-900">[模拟段落 2 · 竞争格局]</span><br>' +
+          "市场集中度 CR3 约 42%（模拟），较去年同期提升 3 个百分点。头部企业在研发投入与渠道下沉方面持续加大力度，" +
+          "中小厂商面临份额挤压。差异化竞争主要集中在产品定义、定价策略与售后服务三个维度。" +
+          '</p>' +
+          '<p class="mt-2 rounded border-l-4 border-slate-300 bg-white py-2 pl-3 pr-2">' +
+          '<span class="font-medium text-slate-900">[模拟段落 3 · 风险与展望]</span><br>' +
+          "需关注地缘政治对供应链的潜在扰动，以及终端需求复苏节奏不及预期的下行风险。海外关税政策调整可能影响出口业务毛利率。" +
+          "建议维持标配评级，关注季度出货量拐点信号。" +
+          '</p>'
+        ) : (
+          '<p class="mt-2">行业整体景气度温和回升，头部企业受益于成本改善与结构升级，盈利能力环比改善。' +
+          "竞争格局方面集中度持续提升，尾部产能出清加速。" +
+          "中期需关注海外需求韧性与汇率波动对出口业务的影响。</p>"
+        );
+        doc.innerHTML =
+          '<div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">' +
+          '⚠ 模拟演示数据，不构成投资建议。所有数字与观点为 AI 模拟生成，仅供参考。' +
+          '</div>' +
+          '<p class="text-base font-semibold text-slate-900">' + escapeHtml(topic) + " · 模拟研报摘要</p>" +
+          '<div><span class="font-medium text-slate-900">核心观点</span>' +
+          '<p class="mt-1">需求端温和复苏，渠道库存回到健康区间；成本端原材料价格回落改善毛利空间。' +
+          "行业集中度持续提升，头部企业有望进一步扩大份额。</p></div>" +
+          '<div><span class="font-medium text-slate-900">关键数据占位</span>' +
+          '<div class="mt-1 flex flex-wrap gap-2">' +
+          '<span class="rounded bg-white px-2 py-0.5 font-mono text-xs text-slate-500">[图表: 营收同比增速]</span>' +
+          '<span class="rounded bg-white px-2 py-0.5 font-mono text-xs text-slate-500">[表: 分业务毛利率对比]</span>' +
+          '<span class="rounded bg-white px-2 py-0.5 font-mono text-xs text-slate-500">[图: 市场份额变化]</span>' +
+          '<span class="rounded bg-white px-2 py-0.5 font-mono text-xs text-slate-500">[表: 期间费用率]</span>' +
+          "</div></div>" +
+          '<div><span class="font-medium text-red-700">风险提示</span>' +
+          '<p class="mt-1">地缘政治扰动可能影响供应链稳定性；终端需求复苏节奏存在不确定性；' +
+          "原材料价格若反弹将侵蚀毛利改善空间。</p></div>" +
+          '<div><span class="font-medium text-orange-700">合规提示</span>' +
+          '<p class="mt-1">本报告为 AI 模拟生成草稿，不构成投资建议。数据来源标注：Wind 样本区间 2019–2026（模拟）。' +
+          "未经人工复核与合规审核，不得作为投资决策依据。</p></div>" +
+          '<div class="border-t border-slate-200 pt-3">' +
+          '<span class="font-medium text-slate-900">模拟研报段落</span>' +
+          extra +
+          "</div>";
+      }, 800);
+    });
+  }
+
+  function demoCreditRisk(root) {
+    root.innerHTML = shell("信贷风控模型工作台（模拟 Demo）", (
+      '<div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 mb-4">' +
+      '⚠ 演示用途，不用于真实信贷审批。所有评分与建议为模拟数据。' +
       '</div>' +
+      '<div class="grid gap-4 lg:grid-cols-2">' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<p class="text-xs font-medium text-slate-600 mb-2">模拟客户画像</p>' +
+      '<div class="grid grid-cols-2 gap-3">' +
+      '<div><label class="text-[11px] text-slate-500">年龄</label>' +
+      '<select data-field="age" class="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">' +
+      "<option>25-35</option><option>36-45</option><option>46-55</option><option>55+</option>" +
+      "</select></div>" +
+      '<div><label class="text-[11px] text-slate-500">收入水平</label>' +
+      '<select data-field="income" class="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">' +
+      "<option>低（< 5K）</option><option>中（5K-15K）</option><option>高（> 15K）</option>" +
+      "</select></div>" +
+      '<div><label class="text-[11px] text-slate-500">职业类型</label>' +
+      '<select data-field="job" class="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">' +
+      "<option>稳定（公务员/国企）</option><option>一般（私企职员）</option><option>灵活（自由职业）</option>" +
+      "</select></div>" +
+      '<div><label class="text-[11px] text-slate-500">贷款用途</label>' +
+      '<select data-field="purpose" class="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">' +
+      "<option>消费贷</option><option>房贷</option><option>经营贷</option>" +
+      "</select></div>" +
+      "</div>" +
+      '<button type="button" data-action="score" class="mt-3 w-full rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">模拟评分</button>' +
+      "</div>" +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<p class="text-xs font-medium text-slate-600 mb-2">风险评估结果</p>' +
+      '<div data-slot="result" class="text-xs text-slate-400">点击「模拟评分」查看结果</div>' +
+      "</div>" +
+      "</div>" +
+      '<div class="mt-4 grid gap-4 lg:grid-cols-2">' +
+      '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4">' +
+      '<p class="text-xs font-medium text-slate-600">特征重要性（Top 5）</p>' +
+      '<div data-bars class="mt-2 space-y-2"></div>' +
+      '<p class="mt-2 text-[10px] text-slate-400">基于模拟样本的 SHAP 值计算，仅供参考</p>' +
+      "</div>" +
+      '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4">' +
+      '<p class="text-xs font-medium text-slate-600">模型漂移监控</p>' +
+      '<div class="mt-3 space-y-2">' +
+      '<div class="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs">' +
+      '<span class="text-slate-600">PSI（群体稳定性）</span>' +
+      '<span data-slot="psi" class="font-medium text-emerald-600">0.02（正常）</span></div>' +
+      '<div class="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs">' +
+      '<span class="text-slate-600">分箱漂移</span>' +
+      '<span data-slot="drift" class="font-medium text-emerald-600">正常</span></div>' +
+      '<div class="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs">' +
+      '<span class="text-slate-600">拒绝率</span>' +
+      '<span data-slot="reject" class="font-medium text-emerald-600">12.3%（基线）</span></div>' +
+      "</div>" +
+      '<button type="button" data-action="simulate" class="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100">' +
+      "模拟异常注入 / 漂移预警" +
+      "</button>" +
+      '<p data-slot="alert" class="mt-2 hidden rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700"></p>' +
+      "</div>" +
+      "</div>"
+    ));
+    var feats = [
+      { n: "近 6 月逾期次数", v: 92 },
+      { n: "负债收入比", v: 78 },
+      { n: "征信查询次数", v: 65 },
+      { n: "额度使用率", v: 54 },
+      { n: "职业稳定性评分", v: 41 }
+    ];
+    var bars = root.querySelector("[data-bars]");
+    bars.innerHTML = feats.map(function (f) {
+      return (
+        '<div class="flex w-full items-center gap-2 text-xs">' +
+        '<span class="w-28 shrink-0 truncate text-slate-600" title="' + escapeHtml(f.n) + '">' + escapeHtml(f.n) + "</span>" +
+        '<span class="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">' +
+        '<span class="block h-full rounded-full bg-orange-500" style="width:' + f.v + '%"></span></span>' +
+        "<span class=\"w-8 text-right text-slate-500\">" + f.v + "%</span></div>"
+      );
+    }).join("");
+    var driftStates = [
+      { psi: "0.02（正常）", drift: "正常", reject: "12.3%（基线）", psiCls: "text-emerald-600", driftCls: "text-emerald-600", rejectCls: "text-emerald-600", alert: null },
+      { psi: "0.08（关注）", drift: "近端偏移 +0.12", reject: "15.7%（上升）", psiCls: "text-amber-600", driftCls: "text-amber-600", rejectCls: "text-amber-600", alert: "⚠ 漂移预警：PSI 超过 0.05 阈值，建议检查近期客群结构与特征分布变化。" },
+      { psi: "0.18（告警）", drift: "显著偏移 +0.31", reject: "21.4%（偏高）", psiCls: "text-red-600", driftCls: "text-red-600", rejectCls: "text-red-600", alert: "🚨 严重告警：PSI 超过 0.15 红线，模型需立即重训练。拒绝率异常攀升，建议暂停自动审批。" }
+    ];
+    var driftIdx = 0;
+    bind(root, "[data-action=\"simulate\"]", "click", function () {
+      driftIdx = (driftIdx + 1) % driftStates.length;
+      var s = driftStates[driftIdx];
+      root.querySelector("[data-slot=\"psi\"]").className = "font-medium " + s.psiCls;
+      root.querySelector("[data-slot=\"psi\"]").textContent = s.psi;
+      root.querySelector("[data-slot=\"drift\"]").className = "font-medium " + s.driftCls;
+      root.querySelector("[data-slot=\"drift\"]").textContent = s.drift;
+      root.querySelector("[data-slot=\"reject\"]").className = "font-medium " + s.rejectCls;
+      root.querySelector("[data-slot=\"reject\"]").textContent = s.reject;
+      var alertEl = root.querySelector("[data-slot=\"alert\"]");
+      if (s.alert) {
+        alertEl.classList.remove("hidden");
+        alertEl.textContent = s.alert;
+      } else {
+        alertEl.classList.add("hidden");
+      }
+    });
+    bind(root, "[data-action=\"score\"]", "click", function () {
+      var age = root.querySelector("[data-field=\"age\"]").value;
+      var income = root.querySelector("[data-field=\"income\"]").value;
+      var job = root.querySelector("[data-field=\"job\"]").value;
+      var purpose = root.querySelector("[data-field=\"purpose\"]").value;
+      var score, level, levelCls, suggestion, topFeat;
+      if (income.indexOf("高") >= 0 && job.indexOf("稳定") >= 0) {
+        score = 752;
+        level = "低风险";
+        levelCls = "text-emerald-700 bg-emerald-50";
+        suggestion = "建议通过，授信额度可适当放宽。";
+        topFeat = "收入负债比（贡献 22%）、职业稳定性（贡献 18%）为正向主要驱动因素。";
+      } else if (income.indexOf("低") >= 0 && job.indexOf("灵活") >= 0) {
+        score = 428;
+        level = "高风险";
+        levelCls = "text-red-700 bg-red-50";
+        suggestion = "建议拒绝，或要求提供担保/抵押。";
+        topFeat = "近 6 月逾期次数（贡献 41%）、收入负债比（贡献 29%）为主要负向因素。";
+      } else {
+        score = 618;
+        level = "中风险";
+        levelCls = "text-amber-700 bg-amber-50";
+        suggestion = "建议补充收入流水与征信报告后人工复核。";
+        topFeat = "征信查询次数（贡献 18%）与额度使用率（贡献 15%）处于临界区间。";
+      }
+      var resultEl = root.querySelector("[data-slot=\"result\"]");
+      resultEl.innerHTML =
+        '<div class="flex items-center justify-between">' +
+        '<div><span class="text-2xl font-bold text-slate-900">' + score + '</span>' +
+        '<span class="ml-1 text-xs text-slate-400">/ 1000</span></div>' +
+        '<span class="rounded-full px-3 py-1 text-xs font-medium ' + levelCls + '">' + level + "</span>" +
+        "</div>" +
+        '<div class="mt-3 space-y-2 border-t border-slate-100 pt-3">' +
+        '<div class="flex justify-between text-xs"><span class="text-slate-500">客户画像</span>' +
+        '<span class="text-slate-700">' + age + " · " + income + " · " + job + " · " + purpose + "</span></div>" +
+        '<div class="flex justify-between text-xs"><span class="text-slate-500">审批建议</span>' +
+        '<span class="text-slate-700">' + suggestion + "</span></div>" +
+        '<div class="flex justify-between text-xs"><span class="text-slate-500">Top 特征解释</span>' +
+        '<span class="text-slate-700 max-w-[200px] text-right">' + topFeat + "</span></div>" +
+        "</div>";
+    });
+  }
 
-      '</div></div>';
+  function demoMedImaging(root) {
+    var cases = [
+      {
+        title: "胸部 CT · 肺窗复核",
+        patient: "模拟患者 A · 52 岁",
+        accession: "SIM-CT-0420-A",
+        modality: "CT",
+        body: "胸部",
+        triage: "中优先级",
+        triageCls: "border-amber-200 bg-amber-50 text-amber-800",
+        confidence: "0.78",
+        queue: "影像科待复核",
+        series: ["肺窗", "纵隔窗", "MIP"],
+        finding: "右上肺外周见磨玻璃密度候选区，边界较淡，建议结合薄层重建与既往片复核。",
+        action: "24 小时内完成放射科医师复核，必要时安排随访影像。",
+        impression: "右上肺磨玻璃密度影候选提示，建议结合薄层 CT 与既往片对比。",
+        scanStyle: "background:radial-gradient(ellipse at 50% 54%, rgba(226,232,240,.45) 0 18%, transparent 19%), radial-gradient(ellipse at 36% 52%, rgba(148,163,184,.35) 0 11%, transparent 12%), radial-gradient(ellipse at 64% 52%, rgba(148,163,184,.32) 0 11%, transparent 12%), linear-gradient(135deg,#0f172a,#334155);",
+        spots: [
+          {
+            label: "候选灶 A",
+            cls: "border-orange-400 bg-orange-500/10",
+            x: 62,
+            y: 38,
+            w: 16,
+            h: 18,
+            note: "右上肺外周磨玻璃影候选区，算法置信度 0.78。"
+          },
+          {
+            label: "对照区",
+            cls: "border-emerald-400 bg-emerald-500/10",
+            x: 35,
+            y: 48,
+            w: 15,
+            h: 16,
+            note: "左肺对照区未见明显异常候选框。"
+          }
+        ]
+      },
+      {
+        title: "头颅 MRI · 急诊筛查",
+        patient: "模拟患者 B · 67 岁",
+        accession: "SIM-MR-0420-B",
+        modality: "MRI",
+        body: "头颅",
+        triage: "高优先级",
+        triageCls: "border-red-200 bg-red-50 text-red-700",
+        confidence: "0.86",
+        queue: "急诊优先复核",
+        series: ["DWI", "FLAIR", "T2"],
+        finding: "左侧基底节区可疑高信号候选区，需结合临床症状与原始序列进一步判断。",
+        action: "建议急诊影像医师优先复核，并同步提示临床团队关注时间窗。",
+        impression: "左侧基底节区高信号候选提示，需排除急性缺血相关改变。",
+        scanStyle: "background:radial-gradient(ellipse at 49% 50%, rgba(226,232,240,.58) 0 24%, transparent 25%), radial-gradient(ellipse at 42% 48%, rgba(100,116,139,.65) 0 7%, transparent 8%), radial-gradient(ellipse at 58% 51%, rgba(148,163,184,.45) 0 8%, transparent 9%), linear-gradient(135deg,#111827,#475569);",
+        spots: [
+          {
+            label: "急性候选区",
+            cls: "border-red-400 bg-red-500/10",
+            x: 40,
+            y: 42,
+            w: 13,
+            h: 15,
+            note: "左侧基底节区高信号候选区，需优先人工复核。"
+          },
+          {
+            label: "脑室定位",
+            cls: "border-sky-300 bg-sky-500/10",
+            x: 55,
+            y: 48,
+            w: 10,
+            h: 12,
+            note: "解剖定位参考区，用于辅助阅片方向判断。"
+          }
+        ]
+      },
+      {
+        title: "膝关节 X 线 · 骨科初筛",
+        patient: "模拟患者 C · 41 岁",
+        accession: "SIM-XR-0420-C",
+        modality: "X-Ray",
+        body: "膝关节",
+        triage: "低优先级",
+        triageCls: "border-emerald-200 bg-emerald-50 text-emerald-700",
+        confidence: "0.64",
+        queue: "门诊常规复核",
+        series: ["正位", "侧位", "髌骨轴位"],
+        finding: "关节间隙轻度变窄候选提示，未见明确急性骨折候选框。",
+        action: "建议门诊常规复核，结合体格检查评估退变程度。",
+        impression: "膝关节退变候选提示，未见明确急性骨折候选框。",
+        scanStyle: "background:linear-gradient(90deg, transparent 0 39%, rgba(226,232,240,.72) 40% 45%, transparent 46% 54%, rgba(203,213,225,.74) 55% 61%, transparent 62%), radial-gradient(ellipse at 50% 62%, rgba(148,163,184,.48) 0 18%, transparent 19%), linear-gradient(135deg,#1f2937,#64748b);",
+        spots: [
+          {
+            label: "关节间隙",
+            cls: "border-amber-300 bg-amber-500/10",
+            x: 43,
+            y: 56,
+            w: 20,
+            h: 10,
+            note: "关节间隙轻度变窄候选提示，建议结合临床症状复核。"
+          },
+          {
+            label: "骨皮质",
+            cls: "border-emerald-400 bg-emerald-500/10",
+            x: 34,
+            y: 29,
+            w: 12,
+            h: 22,
+            note: "骨皮质连续性候选检查未提示明确急性骨折。"
+          }
+        ]
+      }
+    ];
+    var current = 0;
+    var activeSpot = 0;
+    var seriesIndex = 0;
+    var reviewed = {};
+    var reportReady = {};
 
-    var input = root.querySelector('[data-field="chat-input"]');
-    var btn = root.querySelector('[data-action="chat-send"]');
+    function render() {
+      var item = cases[current];
+      var spot = item.spots[activeSpot] || item.spots[0];
+      var confPct = Math.round(Number(item.confidence) * 100);
+      var reportHtml = reportReady[current] ? (
+        '<div class="mt-3 space-y-2 rounded-xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600">' +
+        '<p><span class="font-medium text-slate-900">检查号：</span>' + escapeHtml(item.accession) + '</p>' +
+        '<p><span class="font-medium text-slate-900">影像所见：</span>' + escapeHtml(item.finding) + '</p>' +
+        '<p><span class="font-medium text-slate-900">初筛印象：</span>' + escapeHtml(item.impression) + '</p>' +
+        '<p><span class="font-medium text-slate-900">建议：</span>' + escapeHtml(item.action) + '</p>' +
+        '<p class="border-t border-slate-100 pt-2 text-red-600">AI 草稿仅用于演示，需放射科医师签发后才可进入正式报告。</p>' +
+        '</div>'
+      ) : (
+        '<p class="mt-3 text-xs leading-relaxed text-slate-500">生成后展示结构化报告草稿：检查号、影像所见、初筛印象、建议和免责声明。</p>'
+      );
+      root.innerHTML = shell("医疗影像初筛工作台", (
+        '<div class="grid gap-4 lg:grid-cols-5">' +
+        '<div class="space-y-3 lg:col-span-3">' +
+        '<div class="relative aspect-video max-h-80 w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-900 shadow-inner" style="' + item.scanStyle + '">' +
+        '<div class="absolute inset-0 opacity-25" style="background-image:linear-gradient(rgba(255,255,255,.14) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.1) 1px, transparent 1px);background-size:22px 22px"></div>' +
+        '<div class="absolute left-3 top-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs font-medium text-white">' + escapeHtml(item.modality) + " · " + escapeHtml(item.series[seriesIndex]) + '</div>' +
+        '<div class="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs text-white">DICOM Preview · 模拟影像</div>' +
+        item.spots.map(function (s, i) {
+          var active = i === activeSpot ? " ring-4 ring-white/50" : " opacity-75 hover:opacity-100";
+          return (
+            '<button type="button" data-spot="' + i + '" aria-label="' + escapeHtml(s.label) + '" ' +
+            'class="absolute rounded-lg border-2 shadow-lg transition ' + s.cls + active + '" ' +
+            'style="left:' + s.x + '%;top:' + s.y + '%;width:' + s.w + '%;height:' + s.h + '%;transform:translate(-50%,-50%)"></button>'
+          );
+        }).join("") +
+        '</div>' +
+        '<div class="grid gap-2 sm:grid-cols-3">' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-400">模态</p><p class="mt-1 text-sm font-semibold text-slate-900">' + escapeHtml(item.modality) + '</p></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-400">部位</p><p class="mt-1 text-sm font-semibold text-slate-900">' + escapeHtml(item.body) + '</p></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-400">置信度</p><p class="mt-1 text-sm font-semibold text-slate-900">' + escapeHtml(item.confidence) + '</p><div class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100"><span class="block h-full rounded-full bg-orange-500" style="width:' + confPct + '%"></span></div></div>' +
+        '</div>' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+        '<div class="flex flex-wrap items-center justify-between gap-2"><p class="text-sm font-semibold text-slate-900">质控清单</p><span class="text-xs text-slate-400">' + escapeHtml(item.accession) + '</span></div>' +
+        '<div class="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">' +
+        '<p class="rounded-lg bg-emerald-50 px-2.5 py-2 text-emerald-700">已脱敏模拟病例</p>' +
+        '<p class="rounded-lg bg-emerald-50 px-2.5 py-2 text-emerald-700">影像质量可读</p>' +
+        '<p class="rounded-lg bg-emerald-50 px-2.5 py-2 text-emerald-700">候选框可定位</p>' +
+        '<p class="rounded-lg px-2.5 py-2 ' + (reviewed[current] ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700") + '">' + (reviewed[current] ? "人工复核已记录" : "等待人工复核") + '</p>' +
+        '</div></div></div>' +
+        '<div class="space-y-4 lg:col-span-2">' +
+        '<label class="block text-xs font-medium text-slate-600">模拟病例</label>' +
+        '<select data-field="case" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-orange-500/20 focus:border-orange-500 focus:ring-4">' +
+        cases.map(function (c, i) {
+          return '<option value="' + i + '"' + (i === current ? " selected" : "") + ">" + escapeHtml(c.title) + "</option>";
+        }).join("") +
+        '</select>' +
+        '<div><p class="mb-2 text-xs font-medium text-slate-600">阅片序列</p><div class="flex flex-wrap gap-2">' +
+        item.series.map(function (name, i) {
+          var cls = i === seriesIndex ? "border-orange-500 bg-orange-50 text-orange-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50";
+          return '<button type="button" data-series="' + i + '" class="rounded-lg border px-3 py-1.5 text-xs font-medium transition ' + cls + '">' + escapeHtml(name) + "</button>";
+        }).join("") +
+        '</div></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+        '<div class="flex flex-wrap items-center justify-between gap-2">' +
+        '<p class="text-sm font-semibold text-slate-900">' + escapeHtml(item.patient) + '</p>' +
+        '<span class="rounded-lg border px-2.5 py-1 text-xs font-medium ' + item.triageCls + '">' + escapeHtml(item.triage) + '</span>' +
+        '</div>' +
+        '<div class="mt-3 space-y-2 text-sm leading-relaxed text-slate-600">' +
+        '<p><span class="font-medium text-slate-900">队列状态：</span>' + escapeHtml(item.queue) + '</p>' +
+        '<p><span class="font-medium text-slate-900">当前标注：</span>' + escapeHtml(spot.label) + '</p>' +
+        '<p>' + escapeHtml(spot.note) + '</p>' +
+        '<p class="border-t border-slate-100 pt-2"><span class="font-medium text-slate-900">初筛摘要：</span>' + escapeHtml(item.finding) + '</p>' +
+        '</div></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-relaxed text-slate-600">' +
+        '<p class="font-medium text-slate-900">复核建议</p>' +
+        '<p class="mt-2">' + escapeHtml(item.action) + '</p>' +
+        '<p data-slot="review-note" class="mt-3 text-xs text-slate-500">' + (reviewed[current] ? "已记录：等待放射科医师复核。" : "待处理：尚未记录人工复核。") + '</p>' +
+        '<button type="button" data-action="review" class="mt-3 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600">' +
+        (reviewed[current] ? "更新复核记录" : "标记待医师复核") +
+        '</button></div>' +
+        '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4">' +
+        '<div class="flex flex-wrap items-center justify-between gap-2"><p class="text-sm font-semibold text-slate-900">结构化报告草稿</p><span class="rounded-lg bg-slate-200 px-2 py-0.5 text-xs text-slate-600">模拟</span></div>' +
+        '<button type="button" data-action="report" class="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50">' +
+        (reportReady[current] ? "刷新报告草稿" : "生成报告草稿") +
+        '</button>' +
+        reportHtml +
+        '</div>' +
+        '<p class="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-700">演示数据不构成医疗诊断，所有候选提示均需执业医师结合完整病史和原始影像复核。</p>' +
+        '</div></div>'
+      ));
 
-    function doSend() {
-      var text = input.value.trim();
-      if (!text) return;
-      window.sendChatMessage(text, root);
-      input.value = '';
+      bind(root, "[data-field=\"case\"]", "change", function (ev) {
+        current = Number(ev.target.value) || 0;
+        activeSpot = 0;
+        seriesIndex = 0;
+        render();
+      });
+      root.querySelectorAll("[data-series]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          seriesIndex = Number(btn.getAttribute("data-series")) || 0;
+          render();
+        });
+      });
+      root.querySelectorAll("[data-spot]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          activeSpot = Number(btn.getAttribute("data-spot")) || 0;
+          render();
+        });
+      });
+      bind(root, "[data-action=\"review\"]", "click", function () {
+        reviewed[current] = true;
+        var note = root.querySelector("[data-slot=\"review-note\"]");
+        if (note) note.textContent = "已记录：等待放射科医师复核。";
+        render();
+      });
+      bind(root, "[data-action=\"report\"]", "click", function () {
+        reportReady[current] = true;
+        render();
+      });
     }
 
-    btn.addEventListener('click', doSend);
-    input.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') {
+    render();
+  }
+
+  function demoClinicalPath(root, product) {
+    root.innerHTML = shell("临床路径建议引擎（模拟 Demo）", (
+      '<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">' +
+      "演示数据不包含真实患者信息，输出仅用于课程 Demo，不构成医疗诊断或处方。" +
+      "</div>" +
+      '<div class="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<p class="mb-3 text-xs font-medium text-slate-600">模拟病程输入</p>' +
+      '<div class="grid gap-3 sm:grid-cols-2">' +
+      '<div><label class="text-[11px] text-slate-500">病种/场景</label>' +
+      '<select data-field="condition" class="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">' +
+      "<option>肺炎</option><option>糖尿病</option><option>急性腹痛</option><option>未分型专科问题</option>" +
+      "</select></div>" +
+      '<div><label class="text-[11px] text-slate-500">路径阶段</label>' +
+      '<select data-field="stage" class="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">' +
+      "<option>初诊评估</option><option>住院第 1 天</option><option>治疗复评</option><option>出院随访</option>" +
+      "</select></div></div>" +
+      '<label class="mt-3 block text-[11px] text-slate-500">症状与病程摘要（模拟）</label>' +
+      '<textarea data-field="symptoms" rows="5" class="mt-0.5 w-full resize-none rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2 text-sm leading-relaxed outline-none ring-orange-500/20 transition focus:border-orange-500 focus:bg-white focus:ring-4">发热 3 天，咳嗽咳痰，活动后气促，血氧略低。</textarea>' +
+      '<button type="button" data-action="suggest-path" class="mt-3 inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">生成路径建议</button>' +
+      "</div>" +
+      '<div data-slot="path-out" class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">填写模拟病程后生成路径建议。</div>' +
+      "</div>"
+    ));
+    function apiBase() {
+      if (!window.location.host) return "http://127.0.0.1";
+      return "";
+    }
+    function renderItems(items, emptyText) {
+      var list = Array.isArray(items) ? items : [];
+      if (!list.length) return '<li>' + escapeHtml(emptyText) + '</li>';
+      return list.map(function (item) {
+        return '<li>' + escapeHtml(item) + '</li>';
+      }).join("");
+    }
+    function renderInlineItems(items, emptyText) {
+      var list = Array.isArray(items) ? items : [];
+      if (!list.length) return escapeHtml(emptyText);
+      return list.map(function (item) {
+        return escapeHtml(item);
+      }).join("；");
+    }
+    function riskClass(level) {
+      if (level === "高危") return "bg-red-50 text-red-700 border-red-200";
+      if (level === "中危") return "bg-amber-50 text-amber-700 border-amber-200";
+      return "bg-emerald-50 text-emerald-700 border-emerald-200";
+    }
+    bind(root, "[data-action=\"suggest-path\"]", "click", function () {
+      var condition = root.querySelector("[data-field=\"condition\"]").value;
+      var stage = root.querySelector("[data-field=\"stage\"]").value;
+      var symptoms = root.querySelector("[data-field=\"symptoms\"]").value.trim();
+      var out = root.querySelector("[data-slot=\"path-out\"]");
+      var btn = root.querySelector("[data-action=\"suggest-path\"]");
+      var token = localStorage.getItem("portal_token");
+      if (!symptoms) {
+        out.className = "rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700";
+        out.textContent = "请先输入模拟症状与病程摘要。";
+        return;
+      }
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 生成中";
+      out.className = "rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600";
+      out.innerHTML = '<p class="flex items-center gap-2">' + spinHtml() + " 正在匹配临床路径规则库…</p>";
+      fetch(apiBase() + "/api/clinical-pathway/suggest", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product_id: product && product.id,
+          condition: condition,
+          stage: stage,
+          symptoms: symptoms
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error((data && data.detail) || "生成失败");
+            return data;
+          });
+        })
+        .then(function (body) {
+          var data = body.data || {};
+          out.className = "rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700";
+          out.innerHTML =
+            '<div class="flex flex-wrap items-start justify-between gap-2">' +
+            '<div><p class="text-xs font-semibold text-slate-400">路径摘要</p>' +
+            '<p class="mt-1 font-medium text-slate-900">' + escapeHtml(data.summary || "已生成模拟路径建议。") + '</p></div>' +
+            '<span class="rounded-full border px-3 py-1 text-xs font-medium ' + riskClass(data.risk_level) + '">' +
+            escapeHtml(data.risk_level || "常规") + "</span></div>" +
+            '<div class="mt-4 grid gap-3 md:grid-cols-2">' +
+            '<div class="rounded-xl bg-slate-50 p-3"><p class="text-xs font-semibold text-slate-500">下一步处置</p>' +
+            '<ol class="mt-2 list-decimal space-y-1 pl-5">' + renderItems(data.next_steps, "补齐病程信息并人工复核") + '</ol></div>' +
+            '<div class="rounded-xl bg-slate-50 p-3"><p class="text-xs font-semibold text-slate-500">建议检查</p>' +
+            '<ul class="mt-2 list-disc space-y-1 pl-5">' + renderItems(data.checks, "基础检查组合") + '</ul></div>' +
+            '<div class="rounded-xl bg-slate-50 p-3"><p class="text-xs font-semibold text-slate-500">用药注意</p>' +
+            '<ul class="mt-2 list-disc space-y-1 pl-5">' + renderItems(data.medication_notes, "用药需医生复核") + '</ul></div>' +
+            '<div class="rounded-xl bg-slate-50 p-3"><p class="text-xs font-semibold text-slate-500">预警信号</p>' +
+            '<ul class="mt-2 list-disc space-y-1 pl-5">' + renderItems(data.warning_signs, "症状加重需及时复评") + '</ul></div></div>' +
+            '<p class="mt-4 rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-800"><span class="font-semibold">会诊建议：</span>' +
+            escapeHtml(data.consultation || "必要时发起专科会诊。") + "</p>" +
+            '<p class="mt-3 text-xs text-slate-500">依据：' + renderInlineItems(data.references, "院内路径库（演示）") + "</p>" +
+            '<p class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">' +
+            escapeHtml(data.disclaimer || "本结果仅为演示，不构成医疗建议。") + "</p>";
+        })
+        .catch(function (ex) {
+          out.className = "rounded-xl border border-red-200 bg-red-50 p-4 text-sm leading-relaxed text-red-700";
+          out.textContent = ex.message || "生成失败，请稍后重试。";
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "生成路径建议";
+        });
+    });
+  }
+
+  function demoDevopsLogs(root) {
+    root.innerHTML = shell("日志聚类与异常", (
+      '<div class="max-h-48 overflow-y-auto rounded-xl border border-slate-900 bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-300">' +
+      '<p data-log="1">2026-05-14T08:01:12Z ERROR payment-svc timeout upstream=db-primary</p>' +
+      '<p data-log="2">2026-05-14T08:01:13Z ERROR payment-svc timeout upstream=db-primary</p>' +
+      '<p data-log="3">2026-05-14T08:01:14Z WARN  cache-miss key=user:88421</p>' +
+      '<p data-log="4">2026-05-14T08:01:18Z ERROR payment-svc timeout upstream=db-primary</p>' +
+      "</div>" +
+      '<button type="button" data-action="cluster" class="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">聚类分析（模拟）</button>'
+    ));
+    bind(root, "[data-action=\"cluster\"]", "click", function () {
+      [1, 2, 4].forEach(function (id) {
+        var p = root.querySelector("[data-log=\"" + id + "\"]");
+        if (p) {
+          p.className = "rounded bg-orange-950/50 text-orange-200";
+        }
+      });
+    });
+  }
+
+  function demoCxBot(root, product) {
+    root.innerHTML = shell("坐席侧话术与情绪", (
+      '<div class="grid gap-4 sm:grid-cols-[1fr_1.1fr]">' +
+      '<div class="space-y-4">' +
+      '<div class="rounded-xl border border-slate-200 bg-slate-50 p-4">' +
+      '<div class="flex items-center justify-between gap-3">' +
+      '<p class="text-xs font-medium text-slate-600">当前会话情绪倾向</p>' +
+      '<span class="rounded-lg bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700">DeepSeek</span>' +
+      "</div>" +
+      '<div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">' +
+      '<div data-slot="meter" class="h-full w-0 rounded-full bg-gradient-to-r from-slate-300 to-slate-400"></div></div>' +
+      '<p data-slot="sentiment-summary" class="mt-1 text-xs text-slate-500">等待生成 · 将随客户原话更新</p></div>' +
+      '<label class="block text-xs font-medium text-slate-600">客户意图</label>' +
+      '<select data-field="intent" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      "<option>投诉配送延迟</option>" +
+      "<option>要求退费</option>" +
+      "<option>态度投诉</option>" +
+      "</select>" +
+      '<label class="block text-xs font-medium text-slate-600">客户原话</label>' +
+      '<textarea data-field="message" rows="5" class="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed outline-none ring-orange-500/20 transition focus:border-orange-500 focus:ring-4">等了一周还没送到，必须给我说法。</textarea>' +
+      '<button type="button" data-action="suggest" class="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">生成话术建议</button>' +
+      "</div>" +
+      '<div data-slot="sug" class="hidden rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 text-sm text-emerald-950"></div>' +
+      "</div>"
+    ));
+    function apiBase() {
+      if (!window.location.host) return "http://127.0.0.1";
+      return "";
+    }
+    function renderList(items, emptyText) {
+      var list = Array.isArray(items) ? items : [];
+      if (!list.length) return '<li>' + escapeHtml(emptyText) + '</li>';
+      return list.map(function (item) {
+        return '<li>' + escapeHtml(item) + '</li>';
+      }).join("");
+    }
+    function updateSentimentCard(data) {
+      var meta = sentimentMeta(data || {});
+      var meter = root.querySelector("[data-slot=\"meter\"]");
+      var summary = root.querySelector("[data-slot=\"sentiment-summary\"]");
+      if (meter) {
+        meter.style.width = meta.score + "%";
+        meter.className = meta.barClass;
+      }
+      if (summary) {
+        summary.textContent = meta.label + " " + meta.score + "% · " + meta.hint;
+      }
+    }
+    bind(root, "[data-action=\"suggest\"]", "click", function () {
+      var intent = root.querySelector("[data-field=\"intent\"]").value;
+      var message = root.querySelector("[data-field=\"message\"]").value.trim();
+      var out = root.querySelector("[data-slot=\"sug\"]");
+      var btn = root.querySelector("[data-action=\"suggest\"]");
+      var token = localStorage.getItem("portal_token");
+      out.classList.remove("hidden");
+      if (!message) {
+        out.className = "rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm text-red-700";
+        out.textContent = "请先输入客户原话。";
+        return;
+      }
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 生成中";
+      out.className = "rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700";
+      out.innerHTML = '<p class="flex items-center gap-2 text-sm text-slate-600">' + spinHtml() + " 正在请求 DeepSeek 生成话术建议…</p>";
+      updateSentimentCard({ sentiment_label: "分析中", sentiment_score: 18 });
+      fetch(apiBase() + "/api/customer-script/suggest", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product_id: product && product.id,
+          intent: intent,
+          customer_message: message
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error((data && data.detail) || "生成失败");
+            return data;
+          });
+        })
+        .then(function (body) {
+          var data = body.data || {};
+          updateSentimentCard(data);
+          out.className = "rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 text-sm text-emerald-950";
+          out.innerHTML =
+            '<p class="text-xs font-semibold text-emerald-700">情绪判断</p>' +
+            '<p class="mt-1 font-medium">' + escapeHtml(data.sentiment_label || data.sentiment || "需人工复核") + '</p>' +
+            '<p class="mt-4 text-xs font-semibold text-emerald-700">推荐话术</p>' +
+            '<p class="mt-1 leading-relaxed">' + escapeHtml(data.reply || "请先安抚客户情绪，并承诺核查后给出明确回访时间。") + '</p>' +
+            '<p class="mt-4 text-xs font-semibold text-emerald-700">处理步骤</p>' +
+            '<ol class="mt-1 list-decimal space-y-1 pl-5">' + renderList(data.steps, "确认问题并给出处理时限") + '</ol>' +
+            '<p class="mt-4 text-xs font-semibold text-emerald-700">升级策略</p>' +
+            '<p class="mt-1 leading-relaxed">' + escapeHtml(data.escalation || "若客户持续强烈投诉，升级给主管处理。") + '</p>' +
+            '<p class="mt-4 text-xs font-semibold text-emerald-700">禁用词提醒</p>' +
+            '<ul class="mt-1 list-disc space-y-1 pl-5">' + renderList(data.forbidden_words, "避免推诿和绝对化承诺") + '</ul>';
+        })
+        .catch(function (ex) {
+          updateSentimentCard({ sentiment_label: "生成失败", sentiment_score: 0 });
+          out.className = "rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm leading-relaxed text-red-700";
+          out.textContent = ex.message || "生成失败，请稍后重试。";
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "生成话术建议";
+        });
+    });
+  }
+
+  function clampSentimentScore(value, fallback) {
+    var score = Number(value);
+    if (!Number.isFinite(score)) score = fallback;
+    return Math.max(0, Math.min(100, Math.round(score)));
+  }
+
+  function sentimentMeta(data) {
+    var raw = data || {};
+    var label = String(raw.sentiment_label || raw.sentiment || "需人工复核").trim();
+    var text = label.toLowerCase();
+    var score;
+    var hint;
+    var barClass;
+    if (text.indexOf("高风险") >= 0 || text.indexOf("强烈") >= 0 || text.indexOf("愤怒") >= 0 || text.indexOf("angry") >= 0 || text.indexOf("severe") >= 0 || text.indexOf("high") >= 0) {
+      label = "高风险负面";
+      score = clampSentimentScore(raw.sentiment_score, 88);
+      hint = "高风险负面，建议安抚并升级";
+      barClass = "h-full rounded-full bg-gradient-to-r from-orange-500 to-red-500";
+    } else if (text.indexOf("负面") >= 0 || text.indexOf("投诉") >= 0 || text.indexOf("不满") >= 0 || text.indexOf("差评") >= 0 || text.indexOf("negative") >= 0 || text.indexOf("complaint") >= 0) {
+      label = "偏负面";
+      score = clampSentimentScore(raw.sentiment_score, 72);
+      hint = "偏负面，优先安抚与解释";
+      barClass = "h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500";
+    } else if (text.indexOf("neutral") >= 0 || text.indexOf("中性") >= 0 || text.indexOf("一般") >= 0) {
+      label = "中性";
+      score = clampSentimentScore(raw.sentiment_score, 45);
+      hint = "模型判断为中性，保持解释清晰";
+      barClass = "h-full rounded-full bg-gradient-to-r from-sky-400 to-cyan-500";
+    } else if (text.indexOf("正向") >= 0 || text.indexOf("满意") >= 0 || text.indexOf("positive") >= 0 || text.indexOf("happy") >= 0) {
+      label = "正向";
+      score = clampSentimentScore(raw.sentiment_score, 24);
+      hint = "正向，保持响应效率";
+      barClass = "h-full rounded-full bg-gradient-to-r from-emerald-400 to-green-500";
+    } else if (text.indexOf("分析中") >= 0) {
+      score = clampSentimentScore(raw.sentiment_score, 18);
+      hint = "正在分析客户原话";
+      barClass = "h-full rounded-full bg-gradient-to-r from-slate-300 to-slate-400";
+    } else if (text.indexOf("失败") >= 0) {
+      score = clampSentimentScore(raw.sentiment_score, 0);
+      hint = "本次未完成情绪判断";
+      barClass = "h-full rounded-full bg-gradient-to-r from-slate-300 to-slate-400";
+    } else {
+      score = clampSentimentScore(raw.sentiment_score, 55);
+      hint = "需人工复核情绪风险";
+      barClass = "h-full rounded-full bg-gradient-to-r from-slate-400 to-slate-500";
+    }
+    return {
+      label: label,
+      score: score,
+      hint: hint,
+      barClass: barClass
+    };
+  }
+
+  function demoAdminRouter(root) {
+    root.innerHTML = shell("密钥与路由（模拟）", (
+      '<table class="w-full text-left text-xs">' +
+      "<thead><tr class=\"border-b border-slate-200 text-slate-500\">" +
+      "<th class=\"py-2\">应用</th><th class=\"py-2\">路由策略</th><th class=\"py-2\">状态</th></tr></thead><tbody>" +
+      '<tr class="border-b border-slate-100"><td class="py-2 font-medium">客服机器人</td><td class="py-2">gpt-4.1-mini · 华东</td>' +
+      '<td class="py-2"><button type="button" data-toggle="1" class="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">启用</button></td></tr>' +
+      '<tr class="border-b border-slate-100"><td class="py-2 font-medium">内部 RAG</td><td class="py-2">私有模型 · VPC</td>' +
+      '<td class="py-2"><button type="button" data-toggle="2" class="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">启用</button></td></tr>' +
+      "</tbody></table>" +
+      '<p class="mt-3 text-xs text-slate-500">API Key：<span class="font-mono">sk-••••••••8f2a</span>（脱敏模拟）</p>'
+    ));
+    root.querySelectorAll("[data-toggle]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var on = btn.textContent === "启用";
+        btn.textContent = on ? "熔断" : "启用";
+        btn.className = on
+          ? "rounded-full bg-red-100 px-2 py-0.5 text-red-800"
+          : "rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800";
+      });
+    });
+  }
+
+  function demoDirectorSandbox(root) {
+    root.innerHTML = shell("战略沙盘（演示）", (
+      '<div class="grid gap-4 sm:grid-cols-3">' +
+      '<div><label class="text-xs text-slate-600">销售弹性</label>' +
+      '<input type="range" data-range="s" min="0" max="100" value="55" class="mt-1 w-full accent-orange-500" /></div>' +
+      '<div><label class="text-xs text-slate-600">运营成本压力</label>' +
+      '<input type="range" data-range="c" min="0" max="100" value="40" class="mt-1 w-full accent-orange-500" /></div>' +
+      '<div><label class="text-xs text-slate-600">研发投入</label>' +
+      '<input type="range" data-range="r" min="0" max="100" value="65" class="mt-1 w-full accent-orange-500" /></div></div>' +
+      '<div class="mt-4 grid grid-cols-3 gap-3 text-center">' +
+      '<div class="rounded-xl border border-slate-200 bg-slate-50 p-3"><p class="text-xs text-slate-500">营收增速</p>' +
+      '<p data-kpi="rev" class="mt-1 text-xl font-semibold text-slate-900">—</p></div>' +
+      '<div class="rounded-xl border border-slate-200 bg-slate-50 p-3"><p class="text-xs text-slate-500">毛利率</p>' +
+      '<p data-kpi="margin" class="mt-1 text-xl font-semibold text-slate-900">—</p></div>' +
+      '<div class="rounded-xl border border-slate-200 bg-slate-50 p-3"><p class="text-xs text-slate-500">现金流</p>' +
+      '<p data-kpi="cash" class="mt-1 text-xl font-semibold text-slate-900">—</p></div></div>'
+    ));
+    function recalc() {
+      var s = +root.querySelector("[data-range=\"s\"]").value;
+      var c = +root.querySelector("[data-range=\"c\"]").value;
+      var r = +root.querySelector("[data-range=\"r\"]").value;
+      var rev = (8 + s * 0.12 - c * 0.05).toFixed(1);
+      var margin = (32 - c * 0.08 + r * 0.04).toFixed(1);
+      var cash = (s - c + r * 0.3).toFixed(0);
+      root.querySelector("[data-kpi=\"rev\"]").textContent = rev + "%";
+      root.querySelector("[data-kpi=\"margin\"]").textContent = margin + "%";
+      root.querySelector("[data-kpi=\"cash\"]").textContent = (cash > 0 ? "+" : "") + cash + "（模拟）";
+    }
+    root.querySelectorAll("[data-range]").forEach(function (el) {
+      el.addEventListener("input", recalc);
+    });
+    recalc();
+  }
+
+  function demoTrainBot(root, product) {
+    var history = [];
+    var round = 0;
+    var opening = "你们比竞品贵 15%，凭什么？如果只能讲概念，我很难往下推进。";
+
+    root.innerHTML = shell("合规陪练舱", (
+      '<div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 mb-4">' +
+      "输入 <code class=\"rounded bg-white/70 px-1\">/end</code> 可结束演练并生成教练复盘。对话通过后端接口返回，便于统一权限与后续模型接入。" +
+      "</div>" +
+      '<div data-slot="chat" class="max-h-80 space-y-3 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"></div>' +
+      '<div class="mt-3 flex flex-col gap-2 sm:flex-row">' +
+      '<input type="text" data-field="reply" placeholder="输入你的回应…例如：我们先用 PoC 和合同指标验证效果" ' +
+      'class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-orange-500/20 transition focus:border-orange-500 focus:ring-4" />' +
+      '<button type="button" data-action="send" class="rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">发送</button>' +
+      '<button type="button" data-action="end" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">结束</button>' +
+      "</div>" +
+      '<div data-slot="coach" class="mt-3 hidden rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm leading-relaxed text-slate-700"></div>'
+    ));
+
+    var chat = root.querySelector("[data-slot=\"chat\"]");
+    var input = root.querySelector("[data-field=\"reply\"]");
+    var send = root.querySelector("[data-action=\"send\"]");
+    var end = root.querySelector("[data-action=\"end\"]");
+    var coach = root.querySelector("[data-slot=\"coach\"]");
+
+    function append(role, text) {
+      var label = role === "user" ? "我" : role === "coach" ? "教练" : "李总";
+      var cls = role === "user" ? "bg-orange-50 text-slate-800" : role === "coach" ? "bg-emerald-50 text-slate-800" : "bg-white text-slate-700";
+      var align = role === "user" ? "ml-auto" : "";
+      chat.insertAdjacentHTML(
+        "beforeend",
+        '<p class="' + align + " max-w-[86%] rounded-lg p-2 shadow-sm " + cls + '">' +
+        '<span class="text-xs text-slate-400">' + label + " · </span>" +
+        escapeHtml(text).replace(/\n/g, "<br/>") +
+        "</p>"
+      );
+      chat.scrollTop = chat.scrollHeight;
+      history.push({ role: role === "user" ? "user" : "assistant", content: text });
+    }
+
+    function setBusy(busy) {
+      input.disabled = busy;
+      send.disabled = busy;
+      end.disabled = busy;
+      send.textContent = busy ? "生成中…" : "发送";
+    }
+
+    function showCoach(data) {
+      coach.classList.remove("hidden");
+      coach.innerHTML =
+        '<p class="mb-1 text-xs font-semibold text-emerald-700">AI 教练复盘</p>' +
+        '<div>' + escapeHtml(data.reply).replace(/\n/g, "<br/>") + "</div>";
+      input.disabled = true;
+      send.disabled = true;
+      end.disabled = true;
+    }
+
+    function sendMessage(text) {
+      var value = text.trim();
+      if (!value) return;
+      round += 1;
+      append("user", value);
+      input.value = "";
+      setBusy(true);
+      fetch(apiBase() + "/api/employee-training/respond", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          product_id: product && product.id,
+          user_message: value,
+          round: round,
+          history: history.slice(-12)
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error((data && data.detail) || "陪练接口调用失败");
+            return data;
+          });
+        })
+        .then(function (payload) {
+          var data = payload && payload.data;
+          if (!data) throw new Error("陪练响应为空");
+          if (data.phase === "report") {
+            append("coach", data.reply);
+            showCoach(data);
+          } else {
+            append("assistant", data.reply);
+          }
+        })
+        .catch(function (ex) {
+          append("coach", "接口暂不可用：" + (ex.message || "未知错误") + "。请确认已通过 Docker 服务地址访问并已登录。");
+        })
+        .finally(function () {
+          if (!input.disabled) setBusy(false);
+        });
+    }
+
+    append("assistant", opening);
+    bind(root, "[data-action=\"send\"]", "click", function () {
+      sendMessage(input.value);
+    });
+    bind(root, "[data-action=\"end\"]", "click", function () {
+      sendMessage("/end");
+    });
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        sendMessage(input.value);
+      }
+    });
+  }
+
+  function demoAskData(root) {
+    root.innerHTML = shell("问数 · NL → SQL（模拟）", (
+      '<textarea data-field="nl" rows="2" class="w-full rounded-xl border border-slate-200 bg-slate-50/50 p-3 text-sm" placeholder="用自然语言描述指标…">上月华东区订单金额按周趋势</textarea>' +
+      '<button type="button" data-action="sql" class="mt-2 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">生成可审计 SQL（模拟）</button>' +
+      '<pre data-slot="sql" class="mt-3 hidden overflow-x-auto rounded-xl border border-slate-200 bg-slate-900 p-3 font-mono text-xs text-emerald-300"></pre>' +
+      '<p data-slot="viz" class="mt-2 hidden text-xs text-slate-600"></p>'
+    ));
+    bind(root, "[data-action=\"sql\"]", "click", function () {
+      var nl = root.querySelector("[data-field=\"nl\"]").value.trim();
+      var pre = root.querySelector("[data-slot=\"sql\"]");
+      var viz = root.querySelector("[data-slot=\"viz\"]");
+      pre.classList.remove("hidden");
+      pre.textContent = "SELECT week, SUM(order_amt) amt\nFROM dw.f_orders\nWHERE region = '华东' AND dt BETWEEN ...\nGROUP BY 1 ORDER BY 1;";
+      viz.classList.remove("hidden");
+      viz.innerHTML =
+        "语义层映射：<code class=\"rounded bg-slate-100 px-1\">订单金额=含税成交额</code> · 图表建议：折线图（模拟）<br/>问题摘要：" +
+        escapeHtml(nl);
+    });
+  }
+
+  function demoNavigation(root) {
+    root.innerHTML = shell("语义导航（网格模拟）", (
+      '<p class="mb-2 text-xs text-slate-500">依次点击起点、终点，然后规划路线。</p>' +
+      '<div data-grid class="grid max-w-xs grid-cols-5 gap-1"></div>' +
+      '<button type="button" data-action="plan" class="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">规划路线</button>' +
+      '<p data-slot="path" class="mt-2 text-xs text-slate-600"></p>'
+    ));
+    var grid = root.querySelector("[data-grid]");
+    var cells = [];
+    for (var i = 0; i < 25; i++) {
+      cells.push("<button type=\"button\" data-cell=\"" + i + "\" class=\"h-9 rounded border border-slate-200 bg-white text-[10px] text-slate-400 hover:border-orange-300\">" + i + "</button>");
+    }
+    grid.innerHTML = cells.join("");
+    var picks = [];
+    root.querySelectorAll("[data-cell]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var idx = +btn.getAttribute("data-cell");
+        if (picks.length >= 2) picks = [];
+        picks.push(idx);
+        root.querySelectorAll("[data-cell]").forEach(function (b) {
+          b.className = "h-9 rounded border border-slate-200 bg-white text-[10px] text-slate-400 hover:border-orange-300";
+        });
+        picks.forEach(function (p) {
+          var b = root.querySelector("[data-cell=\"" + p + "\"]");
+          b.className = "h-9 rounded border-2 border-orange-500 bg-orange-50 text-[10px] font-medium text-orange-800";
+        });
+      });
+    });
+    bind(root, "[data-action=\"plan\"]", "click", function () {
+      if (picks.length < 2) {
+        root.querySelector("[data-slot=\"path\"]").textContent = "请先选择起点与终点。";
+        return;
+      }
+      var a = picks[0];
+      var b = picks[1];
+      var path = [];
+      var x0 = a % 5, y0 = (a / 5) | 0, x1 = b % 5, y1 = (b / 5) | 0;
+      var x = x0, y = y0;
+      path.push(y * 5 + x);
+      while (x !== x1) {
+        x += x < x1 ? 1 : -1;
+        path.push(y * 5 + x);
+      }
+      while (y !== y1) {
+        y += y < y1 ? 1 : -1;
+        path.push(y * 5 + x);
+      }
+      root.querySelectorAll("[data-cell]").forEach(function (el) {
+        var i = +el.getAttribute("data-cell");
+        if (path.indexOf(i) >= 0 && picks.indexOf(i) < 0) {
+          el.className = "h-9 rounded border border-orange-200 bg-orange-100 text-[10px] text-orange-900";
+        }
+      });
+      root.querySelector("[data-slot=\"path\"]").textContent =
+        "模拟路径（曼哈顿距离）：经过 " + path.length + " 格，偏好无障碍主通道（演示）。";
+    });
+  }
+
+  function demoObjectDetect(root) {
+    root.innerHTML = shell("目标检测预览", (
+      '<div class="relative aspect-video max-h-52 w-full overflow-hidden rounded-xl border border-slate-200 bg-gradient-to-br from-sky-100 to-slate-200">' +
+      '<div data-box="1" class="absolute left-[12%] top-[28%] hidden h-[22%] w-[18%] rounded border-2 border-orange-500 bg-orange-500/10 shadow-sm">' +
+      '<span class="absolute -top-5 left-0 rounded bg-orange-500 px-1.5 py-0.5 text-[10px] text-white">person 0.91</span></div>' +
+      '<div data-box="2" class="absolute left-[55%] top-[48%] hidden h-[16%] w-[24%] rounded border-2 border-orange-500 bg-orange-500/10">' +
+      '<span class="absolute -top-5 left-0 rounded bg-orange-500 px-1.5 py-0.5 text-[10px] text-white">pallet 0.84</span></div></div>' +
+      '<button type="button" data-action="run" class="mt-3 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">运行检测（模拟）</button>' +
+      '<p data-slot="cnt" class="mt-2 text-xs text-slate-600"></p>'
+    ));
+    bind(root, "[data-action=\"run\"]", "click", function () {
+      root.querySelector("[data-box=\"1\"]").classList.remove("hidden");
+      root.querySelector("[data-box=\"2\"]").classList.remove("hidden");
+      root.querySelector("[data-slot=\"cnt\"]").textContent = "计数：人员 1 · 托盘 1 · 推理耗时 42ms（模拟）";
+    });
+  }
+
+  function demoSmartOffice(root) {
+    root.innerHTML = shell("多流程文档审查", (
+      '<div class="flex flex-wrap gap-2 border-b border-slate-100 pb-3">' +
+      ["报销单据", "简历筛选", "招标文件", "合同审核"].map(function (t, i) {
+        return (
+          '<button type="button" data-tab="' + i + '" class="rounded-full px-3 py-1 text-xs font-medium ' +
+          (i === 0 ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200") + '">' +
+          escapeHtml(t) + "</button>"
+        );
+      }).join("") +
+      "</div>" +
+      '<div data-panel="0" class="mt-3 text-sm text-slate-700">差旅餐费超标 12%，缺少招待对象说明（模拟规则命中）。</div>' +
+      '<div data-panel="1" class="mt-3 hidden text-sm text-slate-700">简历与 JD 匹配度 76%：后端经验充分，行业经验偏弱（模拟）。</div>' +
+      '<div data-panel="2" class="mt-3 hidden text-sm text-slate-700">与历史中标方案相似度 18%，未发现明显串标片段（模拟）。</div>' +
+      '<div data-panel="3" class="mt-3 hidden text-sm text-slate-700">责任上限条款与模板不一致，建议法务复核（模拟）。</div>'
+    ));
+    root.querySelectorAll("[data-tab]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var i = btn.getAttribute("data-tab");
+        root.querySelectorAll("[data-tab]").forEach(function (b) {
+          b.className = "rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200";
+        });
+        btn.className = "rounded-full bg-orange-500 px-3 py-1 text-xs font-medium text-white";
+        root.querySelectorAll("[data-panel]").forEach(function (p) {
+          p.classList.toggle("hidden", p.getAttribute("data-panel") !== i);
+        });
+      });
+    });
+  }
+
+  function demoLongContextQa(root) {
+    var DOCS = {
+      "服务合同": {
+        title: "技术服务协议（模拟）",
+        chapters: [
+          { id: "art1", label: "第 1 条  定义与解释", text: "本协议中「服务」指乙方按照附件 A 所列技术规格提供的软件开发与运维支持。「交付物」包括源代码、编译产物、接口文档与部署说明。术语若无特别定义，则按照行业惯例解释。双方确认已充分理解并同意各条款含义。" },
+          { id: "art2", label: "第 2 条  服务范围", text: "乙方应在项目启动后 90 日内完成核心模块开发并通过验收测试。服务范围包含需求分析、架构设计、编码实现、单元测试与集成测试。超出附件 A 范围的新增需求须另行签署补充协议并按人天报价。" },
+          { id: "art3", label: "第 3 条  服务期限", text: "本协议自双方签署之日起生效，初始服务期为 24 个月。服务期届满前 60 日，任何一方均可书面提出续约意向，双方协商一致后签署续约协议。若未达成续约，协议到期自动终止。" },
+          { id: "art4", label: "第 4 条  费用与结算", text: "项目总费用为人民币伍拾万元整，分四期支付：签约后 7 日内支付 30%，核心模块验收后支付 30%，整体验收后支付 30%，质保期满后支付 10%。每期付款前乙方应开具等额增值税专用发票。" },
+          { id: "art5", label: "第 5 条  交付与验收", text: "乙方应在各里程碑节点提交交付物与测试报告。甲方应在收到交付物后 10 个工作日内完成验收或提出书面整改意见。逾期未提出视为验收通过。整改完成后重新进入验收流程。" },
+          { id: "art6", label: "第 6 条  知识产权", text: "乙方为履行本协议所创作的代码、文档等知识产权在甲方付清全部费用后转让给甲方。乙方保留其通用工具、框架和预置组件的所有权，甲方获得不可撤销的永久使用许可。" },
+          { id: "art7", label: "第 7 条  保密义务", text: "双方对在履行协议过程中获知的对方商业秘密、技术信息和客户数据承担保密义务。保密期限自获知之日起至信息公开后 3 年止。违反保密义务的一方应赔偿对方因此遭受的全部损失。" },
+          { id: "art8", label: "第 8 条  数据安全", text: "乙方处理甲方数据时应遵守适用法律和附件 B 数据处理协议（DPA）。数据存储须位于中国境内服务器。乙方不得将数据用于协议约定之外的任何目的，并在协议终止后 30 日内删除或返还所有数据。" },
+          { id: "art9", label: "第 9 条  质量保证", text: "乙方承诺交付的软件符合附件 A 所列功能规格与性能指标。验收通过后提供 12 个月免费质保，质保期内对程序错误提供免费修复。人为误操作、第三方组件固有缺陷不在质保范围内。" },
+          { id: "art10", label: "第 10 条  违约责任", text: "任何一方违反协议条款给对方造成损失的，应承担赔偿责任。乙方延期交付超过 30 日的，每逾期一日按未交付部分对应金额的 0.05% 支付违约金。违约金总额累计不超过协议总金额的 20%。" },
+          { id: "art11", label: "第 11 条  不可抗力", text: "因地震、洪水、疫情、战争或政府禁令等不可抗力导致无法履约的，受影响方应在 7 日内书面通知对方并提供证明。双方协商延期或终止协议，互不承担违约责任。" },
+          { id: "art12", label: "第 12 条  协议终止", text: "任何一方提前 30 日书面通知可终止本协议，终止前已产生的费用仍应结算。一方严重违约且收到书面催告后 15 日内未纠正的，守约方可单方解除协议并要求赔偿。协议终止不影响已产生的权利义务。" },
+          { id: "art13", label: "第 13 条  争议解决", text: "因本协议产生的争议，双方应首先友好协商。协商不成的，提交北京仲裁委员会按其仲裁规则进行仲裁。仲裁裁决为终局的，对双方均有约束力。" }
+        ]
+      },
+      "制度手册": {
+        title: "员工考勤与假期管理制度（模拟）",
+        chapters: [
+          { id: "sec1", label: "第 1 章  总则", text: "本制度依据《劳动法》及公司规章制度制定，适用于全体员工。制度旨在规范考勤管理、保障员工休息休假权利、维护正常生产经营秩序。各部门应严格执行并于每月 5 日前提交上月考勤汇总。" },
+          { id: "sec2", label: "第 2 章  工作时间", text: "公司实行标准工时制，每周工作 5 天，每日工作 8 小时。核心工作时间为 9:00—18:00，含午休 12:00—13:00。特殊岗位可申请弹性工作制，经部门负责人和 HR 审批后执行。研发岗位默认弹性上下班。" },
+          { id: "sec3", label: "第 3 章  年假管理", text: "累计工作满 1 年不满 10 年的，年假 5 天；满 10 年不满 20 年的，年假 10 天；满 20 年的，年假 15 天。年假按自然年度计算，须在次年 3 月底前休完。申请年假需提前 3 日在 OA 提交，经直属主管审批。" },
+          { id: "sec4", label: "第 4 章  病假与事假", text: "病假凭二级以上医院证明申请，3 天以内由主管审批，超过 3 天由 HR 审批。病假期间工资按国家规定发放。事假须提前申请，全年累计不超过 15 天，事假期间无薪。" },
+          { id: "sec5", label: "第 5 章  加班管理", text: "工作日加班按 1.5 倍计算加班费或调休，休息日加班按 2 倍计算，法定节假日加班按 3 倍计算。加班须事先经主管审批同意，未经审批的加班不计入考勤。优先安排调休，调休不得跨年使用。各部门严格控制加班时长，月人均加班不超过 36 小时。" },
+          { id: "sec6", label: "第 6 章  婚假与产假", text: "员工结婚享受婚假 3 天，晚婚（男 25 岁、女 23 岁以上）增加 7 天。女员工产假 98 天（含产前 15 天），难产增加 15 天，多胞胎每多一胎增加 15 天。男员工陪产假 15 天。须提前 30 日凭有效证明申请。" },
+          { id: "sec7", label: "第 7 章  迟到与旷工", text: "迟到超过 30 分钟计旷工半天。月累计迟到 3 次以上记书面警告。连续旷工 3 天或年累计旷工 7 天以上的，公司有权解除劳动合同。考勤异常应在 2 日内通过 OA 补办手续。" },
+          { id: "sec8", label: "第 8 章  附则", text: "本制度由人力资源部负责解释和修订。制度如有更新以最新版本为准，更新后通过公司内网公告。本制度自发布之日起施行，原有考勤规定同时废止。" }
+        ]
+      },
+      "行业研报": {
+        title: "新能源行业季度景气报告（模拟）",
+        chapters: [
+          { id: "rep1", label: "一、宏观环境", text: "本季度国内 GDP 增速环比回升至 5.2%，制造业 PMI 连续三个月位于扩张区间。新能源汽车购置税减免政策延续至 2027 年底，储能补贴试点城市扩至 30 个。欧盟碳关税过渡期启动，对出口企业碳足迹核算提出新要求。" },
+          { id: "rep2", label: "二、产业链分析", text: "上游锂电材料价格经历连续 6 个月下行后企稳，碳酸锂均价回落至 12 万元/吨。中游电池厂商产能利用率回升至 78%，头部企业毛利率改善 3—5 个百分点。下游整车端价格竞争加剧，渗透率突破 45%。" },
+          { id: "rep3", label: "三、竞争格局", text: "行业集中度 CR5 约 58%，较去年同期提升 5 个百分点。龙头企业通过垂直整合与规模效应持续挤压中小厂商。二线企业聚焦细分市场如换电重卡、储能系统寻求差异化突围。外资品牌在华份额下滑至 12%。" },
+          { id: "rep4", label: "四、技术趋势", text: "固态电池研发加速，半固态产品预计 2026 年下半年量产装车。800V 高压平台渗透率快速提升，推动碳化硅功率器件需求增长。钠离子电池储能项目落地加速，成本优势在储能场景逐步显现。" },
+          { id: "rep5", label: "五、投资建议", text: "维持行业标配评级。锂电材料环节库存去化接近尾声，关注龙头企业估值修复机会。整车环节竞争烈度上行，优选有海外市场拓展能力与成本控制优势的公司。储能赛道景气度持续，设备与集成商值得关注。" },
+          { id: "rep6", label: "六、风险提示", text: "产能过剩风险从材料向电芯环节传导，行业平均毛利率有持续下行压力。海外贸易壁垒升级可能影响出口业务。锂资源进口依赖度仍高，地缘政治扰动构成供应链风险。终端需求增速放缓可能引发新一轮价格战。" }
+        ]
+      },
+      "技术白皮书": {
+        title: "零信任安全架构白皮书（模拟）",
+        chapters: [
+          { id: "zt1", label: "1. 概述", text: "零信任（Zero Trust）是一种以「永不信任，始终验证」为核心原则的网络安全模型。与传统边界安全模型不同，零信任假定网络始终处于被攻陷状态，不对任何用户、设备或流量给予隐式信任。本白皮书阐述企业落地零信任架构的核心理念、技术组件与实施路径。" },
+          { id: "zt2", label: "2. 核心理念", text: "零信任建立在三个核心原则上：一是显式验证，始终基于所有可用数据点进行身份认证与授权；二是最小权限，仅授予用户完成当前任务所需的最少访问权限；三是假定入侵，对每一次访问请求都当作来自被攻陷的网络来处理，做最小化爆炸半径的设计。" },
+          { id: "zt3", label: "3. 身份与访问管理", text: "采用多因素认证（MFA）作为基础身份验证手段，结合生物特征、硬件令牌等增强认证强度。权限管理采用基于角色的访问控制（RBAC）与基于属性的访问控制（ABAC）结合，实现动态细粒度授权。建议与现有 LDAP/AD 和 IAM 系统集成。" },
+          { id: "zt4", label: "4. 微隔离技术", text: "通过软件定义边界（SDP）在工作负载之间建立细粒度隔离策略，使攻击者在获得单一主机访问权限后无法横向移动。微隔离策略可基于标签（如环境、应用、合规等级）自动生成，并通过策略即代码方式纳入 CI/CD 流水线管理。" },
+          { id: "zt5", label: "5. 持续监控与分析", text: "部署统一的遥测数据采集平台，收集网络流量、终端行为、身份认证和 API 调用日志。通过 UEBA（用户实体行为分析）和机器学习模型识别异常行为模式。建立 SOAR（安全编排自动化与响应）剧本，对高风险事件触发自动隔离、强制重认证等措施。" },
+          { id: "zt6", label: "6. 数据安全", text: "零信任架构下的数据保护采用分类分级、加密与访问控制三层防护。敏感数据强制启用透明数据加密（TDE），传输过程使用 TLS 1.3，密钥管理通过硬件安全模块（HSM）集中托管。数据访问日志记录所有读取、修改和导出操作，满足审计与合规要求。" },
+          { id: "zt7", label: "7. 实施路径建议", text: "建议采用分阶段渐进式路径：第一阶段梳理资产与敏感数据全貌，部署 MFA 与设备合规检查；第二阶段实施应用层微隔离，替代传统 VPN 访问；第三阶段引入 UEBA 分析能力，打通 SIEM/SOAR 联动；第四阶段实现自适应访问控制与策略自动化。" },
+          { id: "zt8", label: "8. 常见误区与应对", text: "误区一：认为零信任就是单一产品。实际上零信任是体系化架构，需身份、设备、网络、数据多层面协同。误区二：一次性全量部署。应基于风险评估分批次推进，从最敏感的资产开始。误区三：忽视用户体验。策略过度收紧将降低生产力，需在安全与易用间取得平衡。" }
+        ]
+      }
+    };
+
+    var QA_PRESETS = {
+      "服务合同": [
+        { kw: ["终止", "提前", "通知", "解除"], answer: "根据<strong class=\"text-orange-600\">第 12 条</strong>，任何一方提前<strong>至少 30 日书面通知</strong>可终止本协议，终止前已产生的费用仍应结算。若一方严重违约且收到催告后<strong>15 日内未纠正</strong>，守约方可单方解除协议。", ref: { id: "art12", label: "第 12 条  协议终止" } },
+        { kw: ["保密", "数据", "信息", "商业秘密"], answer: "根据<strong class=\"text-orange-600\">第 7 条</strong>和第<strong class=\"text-orange-600\">8 条</strong>，双方承担保密义务，保密期限至信息公开后 <strong>3 年</strong>。数据处理须遵守 DPA 附件 B，存储在中国境内，协议终止后 <strong>30 日内</strong>删除或返还数据。", ref: { id: "art7", label: "第 7 条  保密义务" } },
+        { kw: ["费用", "支付", "结算", "金额", "多少钱"], answer: "根据<strong class=\"text-orange-600\">第 4 条</strong>，项目总费用为<strong>人民币伍拾万元整</strong>，分四期支付：签约后付 <strong>30%</strong>、核心验收后付 30%、整体验收后付 30%、质保期满后付 10%。每期付款前乙方应开具等额增值税专用发票。", ref: { id: "art4", label: "第 4 条  费用与结算" } },
+        { kw: ["违约", "赔偿", "延期", "违约金"], answer: "根据<strong class=\"text-orange-600\">第 10 条</strong>，乙方延期交付超过 <strong>30 日</strong>的，每逾期一日按未交付部分 <strong>0.05%</strong> 支付违约金，累计上限不超过协议总额的 <strong>20%</strong>。任何违约方应赔偿对方实际损失。", ref: { id: "art10", label: "第 10 条  违约责任" } },
+        { kw: ["知识产权", "代码", "归属", "专利", "著作权"], answer: "根据<strong class=\"text-orange-600\">第 6 条</strong>，甲方付清全部费用后获得代码和文档的知识产权。乙方保留通用工具和预置组件的所有权，甲方获得<strong>不可撤销的永久使用许可</strong>。", ref: { id: "art6", label: "第 6 条  知识产权" } },
+        { kw: ["质量", "保证", "质保", "bug", "缺陷", "维护"], answer: "根据<strong class=\"text-orange-600\">第 9 条</strong>，验收通过后提供 <strong>12 个月免费质保</strong>，对程序错误提供免费修复。人为误操作和第三方组件固有缺陷不在质保范围内。", ref: { id: "art9", label: "第 9 条  质量保证" } }
+      ],
+      "制度手册": [
+        { kw: ["年假", "请假", "休假", "假期"], answer: "根据<strong class=\"text-orange-600\">第 3 章</strong>，累计工作满 1 年不满 10 年的年假 <strong>5 天</strong>，满 10 年不满 20 年的年假 <strong>10 天</strong>，满 20 年的年假 <strong>15 天</strong>。须在次年 <strong>3 月底前</strong>休完，申请需提前 <strong>3 日</strong>在 OA 提交并获直属主管审批。", ref: { id: "sec3", label: "第 3 章  年假管理" } },
+        { kw: ["加班", "调休", "加班费", "工时"], answer: "根据<strong class=\"text-orange-600\">第 5 章</strong>，工作日加班按 <strong>1.5 倍</strong>，休息日按 <strong>2 倍</strong>，法定节假日按 <strong>3 倍</strong>。优先安排调休（不可跨年），月人均加班不超过 <strong>36 小时</strong>。加班须事先经主管审批。", ref: { id: "sec5", label: "第 5 章  加班管理" } },
+        { kw: ["病假", "事假", "医疗", "证明"], answer: "根据<strong class=\"text-orange-600\">第 4 章</strong>，病假凭<strong>二级以上医院证明</strong>申请，3 天以内主管审批，超过 3 天 HR 审批。事假全年累计不超过 <strong>15 天</strong>，事假期间无薪。病假期间工资按国家规定发放。", ref: { id: "sec4", label: "第 4 章  病假与事假" } },
+        { kw: ["婚假", "产假", "陪产假", "结婚"], answer: "根据<strong class=\"text-orange-600\">第 6 章</strong>，婚假 <strong>3 天</strong>（晚婚增加 7 天），女员工产假 <strong>98 天</strong>（含产前 15 天），男员工陪产假 <strong>15 天</strong>。须提前 <strong>30 日</strong>凭有效证明申请。", ref: { id: "sec6", label: "第 6 章  婚假与产假" } },
+        { kw: ["迟到", "旷工", "缺勤", "打卡"], answer: "根据<strong class=\"text-orange-600\">第 7 章</strong>，迟到超 <strong>30 分钟</strong>计旷工半天，月累计 <strong>3 次</strong>以上记书面警告。连续旷工 <strong>3 天</strong>或年累计旷工 <strong>7 天</strong>以上，公司有权解除劳动合同。", ref: { id: "sec7", label: "第 7 章  迟到与旷工" } }
+      ],
+      "行业研报": [
+        { kw: ["趋势", "景气", "增速", "宏观", "环境"], answer: "根据报告<strong class=\"text-orange-600\">「宏观环境」</strong>部分，GDP 增速 <strong>5.2%</strong>，PMI 连续三个月扩张。新能源汽车购置税减免延续至 <strong>2027 年底</strong>，储能补贴试点城市扩至 <strong>30 个</strong>。欧盟碳关税过渡期启动，需关注出口核算要求。", ref: { id: "rep1", label: "一、宏观环境" } },
+        { kw: ["锂", "材料", "电池", "价格", "上游", "成本"], answer: "根据报告<strong class=\"text-orange-600\">「产业链分析」</strong>部分，碳酸锂均价回落至 <strong>12 万元/吨</strong>，电池厂商产能利用率回升至 <strong>78%</strong>，头部企业毛利率改善 <strong>3—5 个百分点</strong>。下游整车端渗透率突破 <strong>45%</strong>。", ref: { id: "rep2", label: "二、产业链分析" } },
+        { kw: ["竞争", "格局", "份额", "集中度", "龙头"], answer: "根据报告<strong class=\"text-orange-600\">「竞争格局」</strong>部分，行业集中度 CR5 约 <strong>58%</strong>（同比 +5pp），龙头企业通过垂直整合与规模效应挤压中小厂商。外资品牌在华份额下滑至 <strong>12%</strong>。", ref: { id: "rep3", label: "三、竞争格局" } },
+        { kw: ["风险", "产能过剩", "贸易", "壁垒", "隐患"], answer: "根据报告<strong class=\"text-orange-600\">「风险提示」</strong>部分，产能过剩风险从材料向电芯传导，行业平均毛利率有持续下行压力。海外贸易壁垒升级、锂资源进口依赖度高、终端需求增速放缓均构成核心风险。", ref: { id: "rep6", label: "六、风险提示" } },
+        { kw: ["投资", "建议", "推荐", "配置", "关注"], answer: "维持行业<strong class=\"text-orange-600\">标配评级</strong>。锂电材料库存去化尾声关注估值修复，整车环节优选有海外能力与成本优势的公司，储能赛道景气持续关注设备与集成商。", ref: { id: "rep5", label: "五、投资建议" } }
+      ],
+      "技术白皮书": [
+        { kw: ["零信任", "定义", "概念", "是什么", "概述"], answer: "根据白皮书<strong class=\"text-orange-600\">「概述」</strong>部分，零信任（Zero Trust）核心理念是<strong>「永不信任，始终验证」</strong>。假定网络始终处于被攻陷状态，不对任何用户、设备或流量给予隐式信任。", ref: { id: "zt1", label: "1. 概述" } },
+        { kw: ["原则", "核心", "理念", "三大原则"], answer: "根据白皮书<strong class=\"text-orange-600\">「核心理念」</strong>部分，零信任三大原则：一是<strong>显式验证</strong>，基于所有可用数据认证授权；二是<strong>最小权限</strong>，仅授予完成任务所需最少权限；三是<strong>假定入侵</strong>，最小化爆炸半径。", ref: { id: "zt2", label: "2. 核心理念" } },
+        { kw: ["mfa", "认证", "身份", "登录", "权限", "iam"], answer: "根据白皮书<strong class=\"text-orange-600\">「身份与访问管理」</strong>部分，采用<strong>多因素认证（MFA）</strong>作为基础手段，结合 RBAC 与 ABAC 实现动态细粒度授权，建议与现有 LDAP/AD 和 IAM 系统集成。", ref: { id: "zt3", label: "3. 身份与访问管理" } },
+        { kw: ["微隔离", "sdp", "横向移动", "网络"], answer: "根据白皮书<strong class=\"text-orange-600\">「微隔离技术」</strong>部分，通过<strong>SDP</strong>在工作负载间建立细粒度隔离，阻止攻击者横向移动。策略基于标签自动生成，通过策略即代码纳入 CI/CD 流水线管理。", ref: { id: "zt4", label: "4. 微隔离技术" } },
+        { kw: ["实施", "路径", "部署", "落地", "阶段"], answer: "建议<strong>分四阶段</strong>渐进实施：第一阶段梳理资产并部署 MFA；第二阶段实施应用层微隔离替代 VPN；第三阶段引入 UEBA 与 SOAR 联动；第四阶段实现自适应访问控制与策略自动化。", ref: { id: "zt7", label: "7. 实施路径建议" } },
+        { kw: ["误区", "错误", "注意", "坑", "避免"], answer: "常见误区有三：一是认为零信任是<strong>单一产品</strong>（实际是体系化架构）；二是<strong>一次性全量部署</strong>（应分批次从最敏感资产开始）；三是<strong>忽视用户体验</strong>（过度收紧策略将降低生产力）。", ref: { id: "zt8", label: "8. 常见误区与应对" } }
+      ]
+    };
+
+    var EXTRACT_PRESETS = {
+      "服务合同": {
+        "全部条款": ["第 1 条  定义与解释", "第 2 条  服务范围", "第 4 条  费用与结算", "第 6 条  知识产权", "第 7 条  保密义务", "第 8 条  数据安全", "第 10 条  违约责任", "第 12 条  协议终止", "第 13 条  争议解决"],
+        "核心义务": ["第 2 条  服务范围 — 乙方的核心交付义务", "第 4 条  费用与结算 — 甲方的付款义务", "第 5 条  交付与验收 — 双方的验收义务"],
+        "风险条款": ["第 10 条  违约责任 — 延期违约金 0.05%/日", "第 11 条  不可抗力 — 免责情形", "第 12 条  协议终止 — 提前 30 日通知"]
+      },
+      "制度手册": {
+        "全部要点": ["第 2 章  工作时间", "第 3 章  年假管理", "第 4 章  病假与事假", "第 5 章  加班管理", "第 6 章  婚假与产假", "第 7 章  迟到与旷工"],
+        "员工权益": ["第 3 章  年假管理 — 5—15 天年假", "第 5 章  加班管理 — 1.5—3 倍加班费", "第 6 章  婚假与产假 — 婚假 3 天/产假 98 天"],
+        "纪律条款": ["第 7 章  迟到与旷工 — 迟到 30 分钟计旷工半天", "第 7 章  旷工 — 连续 3 天可解除合同"]
+      },
+      "行业研报": {
+        "全部要点": ["一、宏观环境 — GDP 5.2%，政策延续", "二、产业链分析 — 锂价企稳，产能利用率 78%", "三、竞争格局 — CR5 58%", "四、技术趋势 — 固态电池 2026H2 量产", "五、投资建议 — 标配评级", "六、风险提示 — 产能过剩/贸易壁垒"],
+        "核心数据": ["GDP 增速 5.2%", "碳酸锂均价 12 万元/吨", "产能利用率 78%", "CR5 集中度 58%", "新能源渗透率 45%"],
+        "风险因素": ["产能过剩从材料向电芯传导", "海外贸易壁垒升级", "锂资源进口依赖度高", "终端需求增速放缓"]
+      },
+      "技术白皮书": {
+        "全部要点": ["概述 — 永不信任始终验证", "核心理念 — 三大原则", "身份与访问管理 — MFA+RBAC+ABAC", "微隔离技术 — SDP", "持续监控与分析 — UEBA+SOAR", "数据安全 — 加密+分类分级", "实施路径 — 四阶段渐进", "常见误区 — 非单一产品"],
+        "关键技术": ["多因素认证 MFA", "软件定义边界 SDP", "用户实体行为分析 UEBA", "透明数据加密 TDE", "安全编排自动化与响应 SOAR"],
+        "实施步骤": ["第一阶段: 资产梳理 + MFA 部署", "第二阶段: 微隔离替代 VPN", "第三阶段: UEBA + SOAR 联动", "第四阶段: 自适应访问控制"]
+      }
+    };
+
+    var EXTRACT_OPTIONS = {
+      "服务合同": ["全部条款", "核心义务", "风险条款"],
+      "制度手册": ["全部要点", "员工权益", "纪律条款"],
+      "行业研报": ["全部要点", "核心数据", "风险因素"],
+      "技术白皮书": ["全部要点", "关键技术", "实施步骤"]
+    };
+
+    var currentDoc = "服务合同";
+    var chatHistory = [];
+    var chatVersion = 0;
+
+    function renderDocView() {
+      var doc = DOCS[currentDoc];
+      var navEl = root.querySelector("[data-slot=\"nav-links\"]");
+      var bodyEl = root.querySelector("[data-slot=\"doc-body\"]");
+      var navHtml = "";
+      var bodyHtml = '<p class="font-semibold text-slate-900 mb-2 text-xs">' + escapeHtml(doc.title) + '</p>';
+      for (var i = 0; i < doc.chapters.length; i++) {
+        var ch = doc.chapters[i];
+        navHtml += '<button type="button" data-nav="' + ch.id + '" class="w-full text-left rounded-lg px-2 py-1.5 text-[11px] leading-relaxed text-slate-600 hover:bg-slate-100 hover:text-slate-800 transition">' + escapeHtml(ch.label) + '</button>';
+        bodyHtml += '<p data-sec="' + ch.id + '" class="rounded-lg transition-all ' + (i === 0 ? '' : 'mt-2') + '">' +
+          '<strong class="text-slate-800">' + escapeHtml(ch.label) + '</strong><br/>' +
+          escapeHtml(ch.text) + '</p>';
+      }
+      navEl.innerHTML = navHtml;
+      bodyEl.innerHTML = bodyHtml;
+      navEl.querySelectorAll("[data-nav]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var id = btn.getAttribute("data-nav");
+          var target = bodyEl.querySelector("[data-sec=\"" + id + "\"]");
+          if (target) {
+            target.scrollIntoView({ behavior: "smooth", block: "start" });
+            target.classList.add("bg-amber-50");
+            setTimeout(function () { target.classList.remove("bg-amber-50"); }, 1500);
+          }
+        });
+      });
+      renderExtractDropdown();
+    }
+
+    function renderExtractDropdown() {
+      var sel = root.querySelector("[data-field=\"extract-type\"]");
+      if (!sel) return;
+      var options = EXTRACT_OPTIONS[currentDoc] || [];
+      var html = '<option value="">-- 选择抽取类型 --</option>';
+      for (var i = 0; i < options.length; i++) {
+        html += '<option value="' + escapeHtml(options[i]) + '">' + escapeHtml(options[i]) + '</option>';
+      }
+      sel.innerHTML = html;
+    }
+
+    function matchQA(question, docType) {
+      var presets = QA_PRESETS[docType] || [];
+      var q = question.toLowerCase();
+      for (var i = 0; i < presets.length; i++) {
+        var p = presets[i];
+        for (var j = 0; j < p.kw.length; j++) {
+          if (q.indexOf(p.kw[j].toLowerCase()) >= 0) {
+            return p;
+          }
+        }
+      }
+      var hints = {
+        "服务合同": "建议围绕合同条款提问，例如：终止条件、费用结算、保密义务、知识产权归属、违约责任等。",
+        "制度手册": "建议围绕考勤制度提问，例如：年假天数、加班政策、病假申请、婚假产假、迟到旷工处理等。",
+        "行业研报": "建议围绕研报内容提问，例如：行业趋势、产业链分析、竞争格局、技术趋势、投资建议、风险提示等。",
+        "技术白皮书": "建议围绕零信任架构提问，例如：核心理念、身份管理、微隔离、实施路径、常见误区等。"
+      };
+      return {
+        answer: '该问题在「' + escapeHtml(DOCS[docType].title) + '」中未找到明确匹配的条款或段落。<br/><br/><span class="text-slate-500 text-xs">' + (hints[docType] || '') + '</span>',
+        ref: null
+      };
+    }
+
+    function addChatBubble(role, text, ref) {
+      var chatEl = root.querySelector("[data-slot=\"chat\"]");
+      var isUser = role === "user";
+      var html = '<div class="flex ' + (isUser ? 'justify-end' : 'justify-start') + '">' +
+        '<div class="max-w-[90%] rounded-2xl px-3 py-2 text-sm leading-relaxed ' + (isUser ? 'bg-orange-500 text-white' : 'bg-white text-slate-700 border border-slate-200') + '">' +
+        text + '</div></div>';
+      if (ref) {
+        html += '<div class="flex justify-start mt-1"><button type="button" data-ref="' + ref.id + '" class="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900 transition hover:bg-amber-100">定位到 ' + escapeHtml(ref.label) + '</button></div>';
+      }
+      var temp = document.createElement("div");
+      temp.innerHTML = html;
+      while (temp.firstChild) {
+        chatEl.appendChild(temp.firstChild);
+      }
+      chatEl.querySelectorAll("[data-ref]:not([data-bound])").forEach(function (btn) {
+        btn.setAttribute("data-bound", "1");
+        var refId = btn.getAttribute("data-ref");
+        btn.addEventListener("click", function () {
+          var bodyEl = root.querySelector("[data-slot=\"doc-body\"]");
+          var target = bodyEl.querySelector("[data-sec=\"" + refId + "\"]");
+          if (target) {
+            target.scrollIntoView({ behavior: "smooth", block: "center" });
+            target.classList.add("bg-amber-100", "ring-2", "ring-orange-400");
+            setTimeout(function () {
+              target.classList.remove("bg-amber-100", "ring-2", "ring-orange-400");
+            }, 2000);
+          }
+        });
+      });
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    function extractClauses(type) {
+      var presets = EXTRACT_PRESETS[currentDoc];
+      if (!presets || !presets[type]) {
+        addChatBubble("ai", '当前文档类型不支持「' + escapeHtml(type) + '」抽取。请切换抽取类型后重试。', null);
+        return;
+      }
+      var listHtml = '<div class="rounded-lg border border-amber-200 bg-amber-50 p-2 mb-2 text-xs text-amber-800">所抽取的关键条款来自「' + escapeHtml(DOCS[currentDoc].title) + '」· 类型：' + escapeHtml(type) + '</div>';
+      listHtml += '<ul class="space-y-1">';
+      var items = presets[type];
+      for (var i = 0; i < items.length; i++) {
+        listHtml += '<li class="flex items-center gap-1.5 text-xs text-slate-700"><span class="inline-flex h-1 w-1 rounded-full bg-orange-500 shrink-0"></span>' + escapeHtml(items[i]) + '</li>';
+      }
+      listHtml += '</ul>';
+      addChatBubble("ai", listHtml, null);
+      chatHistory.push({ role: "ai", text: listHtml });
+    }
+
+    root.innerHTML = shell("长文本问答与追溯", (
+      '<div class="flex flex-wrap gap-2 mb-4">' +
+      ["服务合同", "制度手册", "行业研报", "技术白皮书"].map(function (t) {
+        return '<button type="button" data-tab="' + t + '" class="rounded-full px-3.5 py-1.5 text-xs font-medium transition ' + (t === currentDoc ? 'bg-orange-500 text-white shadow-sm shadow-orange-500/25' : 'bg-slate-100 text-slate-600 hover:bg-slate-200') + '">' + escapeHtml(t) + '</button>';
+      }).join("") +
+      '</div>' +
+      '<div class="grid gap-4 lg:grid-cols-2">' +
+      '<div>' +
+      '<p class="text-xs font-medium text-slate-600 mb-2">文档预览与章节导航</p>' +
+      '<div class="flex gap-3">' +
+      '<div data-slot="nav-links" class="w-32 shrink-0 max-h-[420px] overflow-y-auto space-y-0.5 rounded-xl border border-slate-200 bg-slate-50/50 p-2"></div>' +
+      '<div data-slot="doc-body" class="min-w-0 flex-1 max-h-[420px] overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-600"></div>' +
+      '</div>' +
+      '</div>' +
+      '<div>' +
+      '<p class="text-xs font-medium text-slate-600 mb-2">多轮对话与关键条款抽取</p>' +
+      '<div class="mb-3 flex items-center gap-2">' +
+      '<select data-field="extract-type" class="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs"></select>' +
+      '<button type="button" data-action="extract" class="shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 hover:bg-amber-100">抽取</button>' +
+      '</div>' +
+      '<div data-slot="chat" class="max-h-[300px] overflow-y-auto space-y-2 mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"></div>' +
+      '<div class="flex gap-2">' +
+      '<input type="text" data-field="question" placeholder="输入问题，例如：提前终止需要提前多久通知？" ' +
+      'class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm outline-none ring-orange-500/20 transition focus:border-orange-500 focus:bg-white focus:ring-4" />' +
+      '<button type="button" data-action="send" class="shrink-0 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white shadow-sm shadow-orange-500/25 hover:bg-orange-600">发送</button>' +
+      '</div>' +
+      '<div class="mt-2 flex items-center gap-2">' +
+      '<button type="button" data-action="clear" class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50">清空对话</button>' +
+      '<span class="text-[10px] text-slate-400">上下文连续追问 · 模拟演示</span>' +
+      '</div>' +
+      '</div>' +
+      '</div>'
+    ));
+
+    renderDocView();
+
+    root.querySelectorAll("[data-tab]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var newDoc = btn.getAttribute("data-tab");
+        if (newDoc === currentDoc) return;
+        currentDoc = newDoc;
+        chatVersion++;
+        root.querySelectorAll("[data-tab]").forEach(function (b) {
+          b.className = "rounded-full px-3.5 py-1.5 text-xs font-medium transition " +
+            (b.getAttribute("data-tab") === currentDoc ? "bg-orange-500 text-white shadow-sm shadow-orange-500/25" : "bg-slate-100 text-slate-600 hover:bg-slate-200");
+        });
+        chatHistory = [];
+        root.querySelector("[data-slot=\"chat\"]").innerHTML = "";
+        renderDocView();
+      });
+    });
+
+    bind(root, "[data-action=\"send\"]", "click", function () {
+      var inp = root.querySelector("[data-field=\"question\"]");
+      var question = inp.value.trim();
+      if (!question) return;
+      var docAtAsk = currentDoc;
+      var versionAtAsk = chatVersion;
+      addChatBubble("user", escapeHtml(question), null);
+      chatHistory.push({ role: "user", text: question });
+      inp.value = "";
+      var chatEl = root.querySelector("[data-slot=\"chat\"]");
+      var loadingWrapper = document.createElement("div");
+      loadingWrapper.className = "flex justify-start";
+      loadingWrapper.setAttribute("data-loading", "1");
+      loadingWrapper.innerHTML = '<div class="rounded-2xl bg-white border border-slate-200 px-3 py-2 text-xs text-slate-500">' + spinHtml() + ' 正在检索文档…</div>';
+      chatEl.appendChild(loadingWrapper);
+      chatEl.scrollTop = chatEl.scrollHeight;
+      setTimeout(function () {
+        var loader = chatEl.querySelector("[data-loading]");
+        if (loader) loader.remove();
+        if (versionAtAsk !== chatVersion || docAtAsk !== currentDoc) return;
+        var result = matchQA(question, docAtAsk);
+        addChatBubble("ai", result.answer, result.ref);
+        chatHistory.push({ role: "ai", text: result.answer, ref: result.ref });
+      }, 800);
+    });
+
+    bind(root, "[data-field=\"question\"]", "keydown", function (e) {
+      if (e.key === "Enter") {
         e.preventDefault();
-        doSend();
+        root.querySelector("[data-action=\"send\"]").click();
       }
     });
 
-    chatState.messages.push({ role: 'ai', content: '哦？又是来推销的。行吧，给你五分钟，说说你们能帮我解决什么实际问题。' });
+    bind(root, "[data-action=\"extract\"]", "click", function () {
+      var typeEl = root.querySelector("[data-field=\"extract-type\"]");
+      var type = typeEl.value;
+      if (!type) {
+        addChatBubble("ai", '<span class="text-red-600">请先在左侧下拉框中选择要抽取的条款类型。</span>', null);
+        return;
+      }
+      extractClauses(type);
+      typeEl.value = "";
+    });
+
+    bind(root, "[data-action=\"clear\"]", "click", function () {
+      chatVersion++;
+      chatHistory = [];
+      root.querySelector("[data-slot=\"chat\"]").innerHTML = "";
+    });
   }
 
-  window.sendChatMessage = function (userInput, root) {
-    if (!root) {
-      root = document.getElementById('demo-sandbox-mount');
-    }
-    if (!root) return;
+  // --- 按技术栈回退 ---
 
-    var chatLog = root.querySelector('[data-slot="chat-log"]');
-    if (!chatLog) return;
+  function fallbackRag(root) {
+    demoEnterpriseGpt(root);
+  }
 
-    var text = String(userInput).trim();
-    if (!text) return;
+  function fallbackCode(root) {
+    demoCopilot(root);
+  }
 
-    chatState.round++;
-    chatState.messages.push({ role: 'user', content: text });
+  function fallbackNlp(root) {
+    demoCompliance(root);
+  }
 
-    appendBubble(chatLog, 'user', text);
+  function fallbackMl(root) {
+    demoCreditRisk(root);
+  }
 
-    if (text.includes('/end') || text.toLowerCase().includes('/end') || chatState.round >= 12) {
-      chatState.phase = 'report';
-      var report = generateCoachReport();
-      chatState.messages.push({ role: 'ai', content: report });
+  function fallbackCv(root) {
+    demoObjectDetect(root);
+  }
 
-      appendBubble(chatLog, 'coach-report', report);
+  function fallbackAiops(root) {
+    demoDevopsLogs(root);
+  }
 
-      var input = root.querySelector('[data-field="chat-input"]');
-      var btn = root.querySelector('[data-action="chat-send"]');
-      if (input) input.disabled = true;
-      if (btn) btn.disabled = true;
+  function fallbackDialog(root) {
+    root.innerHTML = shell("对话式流程（通用模拟）", (
+      '<div data-slot="c" class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">' +
+      "<p><span class=\"text-xs text-slate-400\">系统 · </span>您好，我可以帮您查询订单或转人工。</p></div>" +
+      '<button type="button" data-action="go" class="mt-2 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white">模拟用户：查订单</button>'
+    ));
+    bind(root, "[data-action=\"go\"]", "click", function () {
+      root.querySelector("[data-slot=\"c\"]").innerHTML +=
+        '<p class="mt-2"><span class="text-xs text-orange-600">用户 · </span>我要查昨天下的订单。</p>' +
+        '<p class="mt-2"><span class="text-xs text-slate-400">系统 · </span>已找到 1 笔待发货订单（模拟）。</p>';
+    });
+  }
 
-      appendSystemHint(chatLog, '演练已结束。查看上方 AI 教练复盘报告。如需重新开始，请刷新页面。');
-      return;
-    }
+  function fallbackGateway(root) {
+    demoAdminRouter(root);
+  }
 
-    var aiReply = generateAiReply(text);
-    chatState.messages.push({ role: 'ai', content: aiReply });
+  function fallbackDataViz(root) {
+    demoDirectorSandbox(root);
+  }
 
-    setTimeout(function () {
-      appendBubble(chatLog, 'ai', aiReply);
-      chatLog.scrollTop = chatLog.scrollHeight;
-    }, 600);
+  function fallbackDefault(root) {
+    fallbackDialog(root);
+  }
+
+  var BY_NAME = {
+    "企业 GPT 助手": demoEnterpriseGpt,
+    "代码 Copilot 企业版": demoCopilot,
+    "合规审查 AI": demoCompliance,
+    "金融研报生成器": demoFinReport,
+    "信贷风控模型工作台": demoCreditRisk,
+    "医疗影像辅助诊断": demoMedImaging,
+    "临床路径建议引擎": demoClinicalPath,
+    "DevOps 日志洞察": demoDevopsLogs,
+    "客服话术优化": demoCxBot,
+    "仅管理员：密钥与模型路由": demoAdminRouter,
+    "行业总监专区：战略沙盘": demoDirectorSandbox,
+    "员工自助：培训陪练": demoTrainBot,
+    "问数智能体": demoAskData,
+    "位置导航智能体": demoNavigation,
+    "目标检测智能体": demoObjectDetect,
+    "智能办公智能体": demoSmartOffice,
+    "智能体问答（长文本）": demoLongContextQa
   };
 
-  function appendBubble(container, role, content) {
-    var bubble;
+  var BY_TECH = {
+    "大模型与 RAG": fallbackRag,
+    "代码与 IDE 智能": fallbackCode,
+    "NLP 与文档智能": fallbackNlp,
+    "机器学习与风控建模": fallbackMl,
+    "计算机视觉": fallbackCv,
+    "AIOps 与日志智能": fallbackAiops,
+    "对话式 AI": fallbackDialog,
+    "智能体编排与网关": fallbackGateway,
+    "数据分析与可视化": fallbackDataViz,
+    __default__: fallbackDefault
+  };
 
-    if (role === 'user') {
-      bubble =
-        '<div class="flex justify-end gap-2">' +
-        '<div class="min-w-0 max-w-[75%] rounded-xl rounded-tr-sm bg-orange-50 px-3 py-2 text-sm text-slate-800 shadow-sm">' + escapeHtml(content) + '</div>' +
-        '<span class="mt-0.5 shrink-0 rounded-full bg-orange-400 px-1.5 py-0.5 text-[10px] font-bold text-white">我</span>' +
-        '</div>';
-    } else if (role === 'coach-report') {
-      bubble =
-        '<div class="rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 shadow-sm">' +
-        '<p class="mb-2 text-xs font-semibold uppercase tracking-wide text-emerald-700">AI 教练复盘报告</p>' +
-        '<div class="prose prose-sm max-w-none text-sm leading-relaxed text-slate-700">' + renderMarkdown(content) + '</div>' +
-        '</div>';
-    } else {
-      bubble =
-        '<div class="flex gap-2">' +
-        '<span class="mt-0.5 shrink-0 rounded-full bg-slate-400 px-1.5 py-0.5 text-[10px] font-bold text-white">李</span>' +
-        '<div class="min-w-0 max-w-[75%] rounded-xl rounded-tl-sm bg-white px-3 py-2 text-sm text-slate-700 shadow-sm">' + escapeHtml(content) + '</div>' +
-        '</div>';
+  function mount(root, product) {
+    if (!root) return;
+    var name = (product && product.name) || "";
+    var tech = (product && product.tech_stack) || "";
+    var fn = BY_NAME[name] || BY_TECH[tech] || BY_TECH.__default__;
+    try {
+      fn(root, product || {});
+    } catch (e) {
+      root.innerHTML = shell("演示加载失败", '<p class="text-sm text-red-600">沙箱初始化异常，请刷新重试。</p>');
     }
-
-    container.insertAdjacentHTML('beforeend', bubble);
-    container.scrollTop = container.scrollHeight;
   }
 
-  function appendSystemHint(container, text) {
-    var hint =
-      '<div class="rounded-lg bg-slate-100 px-3 py-2 text-center text-xs text-slate-500">' + escapeHtml(text) + '</div>';
-    container.insertAdjacentHTML('beforeend', hint);
-    container.scrollTop = container.scrollHeight;
-  }
-
-  function generateAiReply(userText) {
-    var lower = userText.toLowerCase();
-
-    if (!chatState.challenge1Done && (lower.includes('价格') || lower.includes('贵') || lower.includes('报价') || lower.includes('成本') || chatState.round >= 3)) {
-      chatState.challenge1Done = true;
-      return pickRandom(AI_REPLIES.afterPrice);
-    }
-
-    if (chatState.challenge1Done && !chatState.challenge2Done && (lower.includes('承诺') || lower.includes('保证') || lower.includes('效果') || chatState.round >= 5)) {
-      chatState.challenge2Done = true;
-      return pickRandom(AI_REPLIES.priceTrap);
-    }
-
-    if (chatState.challenge2Done && chatState.round >= 6) {
-      return pickRandom(AI_REPLIES.afterCompliance);
-    }
-
-    return pickRandom(AI_REPLIES.fallback);
-  }
-
-  function generateCoachReport() {
-    var totalMessages = chatState.messages.length;
-    var userMsgs = chatState.messages.filter(function (m) { return m.role === 'user'; });
-    var aiMsgs = chatState.messages.filter(function (m) { return m.role === 'ai'; });
-
-    var complianceOk = false;
-    var salesScore = 3;
-
-    for (var i = 0; i < userMsgs.length; i++) {
-      var msg = userMsgs[i].content.toLowerCase();
-      if (msg.includes('合规') || msg.includes('合同') || msg.includes('不能') || msg.includes('无法承诺') || msg.includes('红线') || msg.includes('poc') || msg.includes('书面')) {
-        complianceOk = true;
-      }
-      if (msg.includes('tco') || msg.includes('价值') || msg.includes('案例') || msg.includes('数据') || msg.includes('sla') || msg.includes('运维')) {
-        salesScore = Math.min(5, salesScore + 1);
-      }
-      if (msg.includes('便宜') || msg.includes('降价') || msg.includes('打折') || msg.includes('回扣')) {
-        salesScore = Math.max(1, salesScore - 1);
-      }
-    }
-
-    if (!complianceOk && chatState.challenge2Done) {
-      for (var j = 0; j < userMsgs.length; j++) {
-        var m2 = userMsgs[j].content.toLowerCase();
-        if (m2.includes('保底') || m2.includes('承诺') || m2.includes('保证') || m2.includes('口头') || m2.includes('私下')) {
-          complianceOk = false;
-          break;
-        }
-      }
-    }
-
-    var overallScore = Math.min(100, salesScore * 15 + (complianceOk ? 25 : 5) + 15);
-    var stars = '';
-    for (var s = 0; s < salesScore; s++) { stars += '★'; }
-    for (var e = salesScore; e < 5; e++) { stars += '☆'; }
-    var complianceLabel = complianceOk ? '🟢 绿灯' : '🔴 红线高危';
-
-    var report =
-      '### 🛑 演练结束！AI 教练复盘报告\n\n' +
-      '#### 📊 综合评分：**' + overallScore + ' / 100**\n' +
-      '- 销售技巧：**' + stars + '** （' + salesScore + '/5）\n' +
-      '- 合规风险：**' + complianceLabel + '**\n\n' +
-      '#### 🔍 关键回合诊断与话术优化\n';
-
-    if (!complianceOk) {
-      report +=
-        '- ⚠️ **合规红线触发**：在面对客户要求私下承诺时，你没有明确拒绝。任何口头保底、私下承诺效果的行为都可能构成合规违规。\n' +
-        '- ❌ 错误话术：对客户的"私下保个底"请求，未能果断表明公司合规立场。\n' +
-        '- ⚠️ 风险点：口头承诺即使不写入合同，也可能被认定为事实上的合同补充条款，给公司带来法律风险。\n' +
-        '- ✨ 优秀话术样例：*"李总，我非常理解您对效果的关切。我们建议通过正式的 PoC 流程，用 30 天实测数据来验证效果。所有承诺我们都会白纸黑字写进合同，这也是对双方权益的最好保障。"*\n\n';
-    } else {
-      report +=
-        '- ✅ **合规意识良好**：在面对客户诱导时，你坚守了合规底线，没有做出不当承诺。\n' +
-        '- ✨ 优秀话术样例：*"李总，效果我们建议通过 PoC 实测验证，所有条款白纸黑字写入合同。这对您也是权益保障。"*\n\n';
-    }
-
-    if (salesScore >= 4) {
-      report +=
-        '- ✅ **销售技巧扎实**：你成功运用了价值锚点（TCO/ROI）、案例举证和 SLA 保障等高级销售技巧。\n' +
-        '- ✨ 你的优势：不陷入价格战，而是引导客户关注长期价值和风险共担。\n\n';
-    } else if (salesScore >= 2) {
-      report +=
-        '- ⚠️ **销售技巧可提升**：部分回应偏被动，建议多使用"价值锚点"替代单纯价格讨论。\n' +
-        '- ✨ 改进建议：准备 3 个客户行业的 ROI 案例数据，在客户质疑价格时用 TCO 框架回应。\n\n';
-    } else {
-      report +=
-        '- ❌ **销售技巧需加强**：回应过于简单或陷入了价格战陷阱，缺乏价值引导。\n' +
-        '- ✨ 改进建议：学习 SPIN 销售法（情境-问题-影响-需求），避免在初次接触中就讨论折扣。\n\n';
-    }
-
-    report +=
-      '---\n' +
-      '**总结**：本次演练共 **' + chatState.round + '** 轮对话。' +
-      '请将上述建议融入日常话术训练，持续提升客户沟通与合规意识。';
-
-    return report;
-  }
+  window.PortalDemos = { mount: mount, sentimentMeta: sentimentMeta };
 })();
