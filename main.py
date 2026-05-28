@@ -46,6 +46,7 @@ COMPLIANCE_PRODUCT_NAME = "合规审查 AI"
 CLINICAL_PATHWAY_PRODUCT_NAME = "临床路径建议引擎"
 EMPLOYEE_TRAINING_PRODUCT_NAME = "员工自助：培训陪练"
 SMART_OFFICE_PRODUCT_NAME = "智能办公智能体"
+ADMIN_ROUTER_PRODUCT_NAME = "仅管理员：密钥与模型路由"
 SMART_OFFICE_SCENARIOS: dict[str, str] = {
     "expense": "报销单据",
     "resume": "简历筛选",
@@ -73,6 +74,143 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 security = HTTPBearer(auto_error=False)
 TRAINING_MEMORY_LIMIT = 24
 TRAINING_MEMORY: dict[str, list["EmployeeTrainingTurn"]] = {}
+
+ADMIN_ROUTER_DEMO_KEYS: list[dict[str, Any]] = [
+    {
+        "key_id": "key_finops_gateway",
+        "provider": "统一模型网关（模拟）",
+        "masked_key": "demo-key-****-finops",
+        "owner": "平台组",
+        "scope": ["费用估算", "路由编排", "审计写入"],
+        "status": "健康",
+        "expires_at": "2026-08-30",
+        "rotation_days": 94,
+        "monthly_quota": 1800000,
+        "used_pct": 42,
+    },
+    {
+        "key_id": "key_rag_private",
+        "provider": "私有 RAG 模型池（模拟）",
+        "masked_key": "demo-key-****-rag",
+        "owner": "知识库组",
+        "scope": ["内部文档问答", "长文本摘要"],
+        "status": "观察",
+        "expires_at": "2026-07-15",
+        "rotation_days": 48,
+        "monthly_quota": 900000,
+        "used_pct": 67,
+    },
+    {
+        "key_id": "key_training_sandbox",
+        "provider": "培训陪练模型池（模拟）",
+        "masked_key": "demo-key-****-train",
+        "owner": "培训组",
+        "scope": ["员工陪练", "评分复盘"],
+        "status": "健康",
+        "expires_at": "2026-09-20",
+        "rotation_days": 115,
+        "monthly_quota": 650000,
+        "used_pct": 28,
+    },
+]
+
+ADMIN_ROUTER_DEMO_ROUTES: list[dict[str, Any]] = [
+    {
+        "route_id": "route_customer_service",
+        "application": "customer-service",
+        "application_label": "客服话术优化",
+        "department": "客户运营",
+        "primary_model": "通用对话模型（模拟）",
+        "fallback_model": "低成本对话模型（模拟）",
+        "provider_key_id": "key_finops_gateway",
+        "policy": "低风险优先成本；投诉升级时切高稳定路由",
+        "region": "华东演示区",
+        "max_rpm": 120,
+        "status": "启用",
+        "cost_per_1k_tokens": 0.012,
+        "latency_ms": 780,
+        "cost_tier": "标准",
+    },
+    {
+        "route_id": "route_internal_rag",
+        "application": "internal-rag",
+        "application_label": "企业 GPT 助手",
+        "department": "全员知识库",
+        "primary_model": "私有知识库模型（模拟）",
+        "fallback_model": "通用长文本模型（模拟）",
+        "provider_key_id": "key_rag_private",
+        "policy": "内部知识优先私有模型；引用缺失时降级人工复核",
+        "region": "VPC 演示区",
+        "max_rpm": 80,
+        "status": "启用",
+        "cost_per_1k_tokens": 0.018,
+        "latency_ms": 960,
+        "cost_tier": "私有",
+    },
+    {
+        "route_id": "route_office_review",
+        "application": "office-review",
+        "application_label": "智能办公智能体",
+        "department": "办公协同",
+        "primary_model": "文档审查模型（模拟）",
+        "fallback_model": "规则引擎复核队列（模拟）",
+        "provider_key_id": "key_finops_gateway",
+        "policy": "文档类任务先脱敏再路由；高风险进入复核队列",
+        "region": "华北演示区",
+        "max_rpm": 60,
+        "status": "启用",
+        "cost_per_1k_tokens": 0.021,
+        "latency_ms": 1100,
+        "cost_tier": "审查",
+    },
+    {
+        "route_id": "route_training_coach",
+        "application": "training-coach",
+        "application_label": "员工自助：培训陪练",
+        "department": "人才发展",
+        "primary_model": "角色扮演模型（模拟）",
+        "fallback_model": "复盘评分模型（模拟）",
+        "provider_key_id": "key_training_sandbox",
+        "policy": "多轮会话限流；复盘结果只保留演示记忆",
+        "region": "华南演示区",
+        "max_rpm": 90,
+        "status": "启用",
+        "cost_per_1k_tokens": 0.014,
+        "latency_ms": 840,
+        "cost_tier": "培训",
+    },
+]
+
+ADMIN_ROUTER_AUDIT_EVENTS: list[dict[str, str]] = [
+    {
+        "time": "2026-05-28 09:30",
+        "actor": "admin1",
+        "action": "更新路由策略",
+        "target": "route_office_review",
+        "result": "高风险文档改为先脱敏后复核",
+    },
+    {
+        "time": "2026-05-28 10:10",
+        "actor": "admin2",
+        "action": "查看密钥台账",
+        "target": "key_rag_private",
+        "result": "仅展示脱敏标识与配额状态",
+    },
+    {
+        "time": "2026-05-28 11:00",
+        "actor": "admin1",
+        "action": "模拟熔断演练",
+        "target": "route_customer_service",
+        "result": "降级到低成本对话模型",
+    },
+]
+
+ADMIN_ROUTER_POLICY: dict[str, Any] = {
+    "secret_policy": "密钥只允许服务端托管，前端和日志仅展示脱敏标识",
+    "routing_policy": "按应用、风险等级、配额水位和合规闸门选择模型",
+    "quota_policy": "单应用超 80% 月配额进入观察，超 95% 自动限流",
+    "data_policy": "演示请求不得携带真实个人、客户、企业、密钥或财务数据",
+}
 
 # 演示账号（与下方初始化数据一致）；用于在升级依赖后修复历史库里损坏的密码哈希
 USERS_SEED: list[tuple[str, str, str | None]] = [
@@ -793,6 +931,109 @@ class ClinicalPathwayResponse(BaseModel):
     message: str = ""
 
 
+class AdminRouterKeyOut(BaseModel):
+    key_id: str
+    provider: str
+    masked_key: str
+    owner: str
+    scope: list[str]
+    status: str
+    expires_at: str
+    rotation_days: int
+    monthly_quota: int
+    used_pct: int = Field(ge=0, le=100)
+
+
+class AdminRouterRouteOut(BaseModel):
+    route_id: str
+    application: str
+    application_label: str
+    department: str
+    primary_model: str
+    fallback_model: str
+    provider_key_id: str
+    policy: str
+    region: str
+    max_rpm: int
+    status: str
+    cost_tier: str
+
+
+class AdminRouterAuditEventOut(BaseModel):
+    time: str
+    actor: str
+    action: str
+    target: str
+    result: str
+
+
+class AdminRouterStatusData(BaseModel):
+    routes: list[AdminRouterRouteOut]
+    keys: list[AdminRouterKeyOut]
+    audit_events: list[AdminRouterAuditEventOut]
+    policy: dict[str, Any]
+    warnings: list[str]
+    disclaimer: str
+
+
+class AdminRouterStatusResponse(BaseModel):
+    success: bool
+    data: AdminRouterStatusData | None = None
+    message: str = ""
+
+
+class AdminRouterSimulateRequest(BaseModel):
+    product_id: int
+    application: Literal["customer-service", "internal-rag", "office-review", "training-coach"]
+    risk_level: Literal["low", "medium", "high"] = "medium"
+    input_tokens: int = Field(default=2400, ge=100, le=50000)
+    contains_sensitive_data: bool = False
+
+
+class AdminRouterSimulationData(BaseModel):
+    route_id: str
+    application_label: str
+    selected_model: str
+    fallback_model: str
+    provider_key_id: str
+    masked_key: str
+    decision: str
+    guardrails: list[str]
+    estimated_cost: str
+    estimated_latency_ms: int
+    throttle: str
+    audit_event: AdminRouterAuditEventOut
+    disclaimer: str
+
+
+class AdminRouterSimulationResponse(BaseModel):
+    success: bool
+    data: AdminRouterSimulationData | None = None
+    message: str = ""
+
+
+class AdminRouterRotateRequest(BaseModel):
+    product_id: int
+    key_id: str = Field(min_length=1, max_length=80)
+    reason: str = Field(default="定期轮换演练", min_length=1, max_length=120)
+
+
+class AdminRouterRotateData(BaseModel):
+    key_id: str
+    masked_key: str
+    rotation_id: str
+    status: str
+    next_rotation_at: str
+    audit_event: AdminRouterAuditEventOut
+    disclaimer: str
+
+
+class AdminRouterRotateResponse(BaseModel):
+    success: bool
+    data: AdminRouterRotateData | None = None
+    message: str = ""
+
+
 class DeepSeekConfigError(RuntimeError):
     """DeepSeek integration is not configured for this deployment."""
 
@@ -844,6 +1085,140 @@ def product_visible_for_user(row: sqlite3.Row, user: dict[str, Any]) -> bool:
     if scope and role in ("Director", "USER"):
         return user.get("industry") == scope
     return True
+
+
+def _require_admin_router_product(
+    product_id: int,
+    user: dict[str, Any],
+) -> sqlite3.Row:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (product_id,),
+        ).fetchone()
+    if row is None or row["name"] != ADMIN_ROUTER_PRODUCT_NAME:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+    if user["role"] != "ADMIN" or not product_visible_for_user(row, user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅管理员可访问该模块")
+    return row
+
+
+def _admin_router_route(application: str) -> dict[str, Any]:
+    for route in ADMIN_ROUTER_DEMO_ROUTES:
+        if route["application"] == application:
+            return route
+    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="路由应用无效")
+
+
+def _admin_router_key(key_id: str) -> dict[str, Any]:
+    for key in ADMIN_ROUTER_DEMO_KEYS:
+        if key["key_id"] == key_id:
+            return key
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="密钥标识不存在")
+
+
+def build_admin_router_status() -> AdminRouterStatusData:
+    warnings: list[str] = []
+    for key in ADMIN_ROUTER_DEMO_KEYS:
+        if int(key["used_pct"]) >= 60:
+            warnings.append(f"{key['key_id']} 配额使用率 {key['used_pct']}%，建议关注限流阈值")
+        if int(key["rotation_days"]) <= 60:
+            warnings.append(f"{key['key_id']} 距离轮换 {key['rotation_days']} 天，建议排期演练")
+    return AdminRouterStatusData(
+        routes=[AdminRouterRouteOut(**route) for route in ADMIN_ROUTER_DEMO_ROUTES],
+        keys=[AdminRouterKeyOut(**key) for key in ADMIN_ROUTER_DEMO_KEYS],
+        audit_events=[AdminRouterAuditEventOut(**event) for event in ADMIN_ROUTER_AUDIT_EVENTS],
+        policy=dict(ADMIN_ROUTER_POLICY),
+        warnings=warnings,
+        disclaimer="本模块仅使用演示台账与模拟路由，不读取、不展示、不存储任何真实 API Key。",
+    )
+
+
+def build_admin_router_simulation(
+    body: AdminRouterSimulateRequest,
+    user: dict[str, Any],
+) -> AdminRouterSimulationData:
+    route = _admin_router_route(body.application)
+    key = _admin_router_key(str(route["provider_key_id"]))
+    high_risk = body.risk_level == "high"
+    quota_pressure = int(key["used_pct"]) >= 80
+    guardrails = [
+        "校验调用方产品 ID 与 ADMIN 权限",
+        "仅展示密钥脱敏标识，禁止下发真实凭据",
+        "记录演示审计事件，便于追溯路由决策",
+    ]
+
+    if body.contains_sensitive_data:
+        selected_model = "阻断：敏感数据复核队列（模拟）"
+        decision = "检测到敏感数据标记，未进入模型调用，转人工复核"
+        estimated_cost = "0.0000 演示币"
+        latency = 120
+        throttle = "阻断"
+        guardrails.append("敏感数据闸门触发：请求内容需先脱敏")
+    elif high_risk:
+        selected_model = str(route["fallback_model"])
+        decision = "高风险任务进入稳态兜底路由，并要求人工复核结论"
+        estimated_cost = f"{body.input_tokens / 1000 * float(route['cost_per_1k_tokens']) * 1.2:.4f} 演示币"
+        latency = int(route["latency_ms"]) + 260
+        throttle = "复核限流"
+        guardrails.append("高风险输出添加人工复核要求")
+    else:
+        selected_model = str(route["primary_model"])
+        decision = "按应用策略选择主路由"
+        estimated_cost = f"{body.input_tokens / 1000 * float(route['cost_per_1k_tokens']):.4f} 演示币"
+        latency = int(route["latency_ms"])
+        throttle = "观察" if quota_pressure else "正常"
+        if quota_pressure:
+            guardrails.append("配额水位较高，进入观察限流")
+
+    event = AdminRouterAuditEventOut(
+        time=datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M"),
+        actor=str(user["username"]),
+        action="模拟模型路由",
+        target=str(route["route_id"]),
+        result=decision,
+    )
+    return AdminRouterSimulationData(
+        route_id=str(route["route_id"]),
+        application_label=str(route["application_label"]),
+        selected_model=selected_model,
+        fallback_model=str(route["fallback_model"]),
+        provider_key_id=str(key["key_id"]),
+        masked_key=str(key["masked_key"]),
+        decision=decision,
+        guardrails=guardrails,
+        estimated_cost=estimated_cost,
+        estimated_latency_ms=latency,
+        throttle=throttle,
+        audit_event=event,
+        disclaimer="结果为演示估算，不代表真实模型价格、时延或路由配置。",
+    )
+
+
+def build_admin_router_rotation(
+    body: AdminRouterRotateRequest,
+    user: dict[str, Any],
+) -> AdminRouterRotateData:
+    key = _admin_router_key(body.key_id.strip())
+    now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    rotation_id = f"rot-{now.strftime('%Y%m%d%H%M')}-{key['key_id'][-4:]}"
+    event = AdminRouterAuditEventOut(
+        time=now.strftime("%Y-%m-%d %H:%M"),
+        actor=str(user["username"]),
+        action="模拟密钥轮换",
+        target=str(key["key_id"]),
+        result=f"{body.reason.strip()}；新密钥仍仅以脱敏标识展示",
+    )
+    return AdminRouterRotateData(
+        key_id=str(key["key_id"]),
+        masked_key=str(key["masked_key"]),
+        rotation_id=rotation_id,
+        status="轮换演练已记录",
+        next_rotation_at=(now + timedelta(days=90)).strftime("%Y-%m-%d"),
+        audit_event=event,
+        disclaimer="轮换为演示记录，不创建、不替换任何真实 API Key。",
+    )
 
 
 def _json_object_from_text(text: str) -> dict[str, Any]:
@@ -2336,6 +2711,39 @@ def get_product(
         industry=row["nav_industry"] or "跨行业通用",
         tech_stack=row["tech_stack"] or "大模型与 RAG",
         detail_intro=detail_text,
+    )
+
+
+@app.get("/api/admin-router/status", response_model=AdminRouterStatusResponse)
+def admin_router_status(
+    product_id: int,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> AdminRouterStatusResponse:
+    _require_admin_router_product(product_id, user)
+    return AdminRouterStatusResponse(success=True, data=build_admin_router_status())
+
+
+@app.post("/api/admin-router/simulate", response_model=AdminRouterSimulationResponse)
+def simulate_admin_router(
+    body: AdminRouterSimulateRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> AdminRouterSimulationResponse:
+    _require_admin_router_product(body.product_id, user)
+    return AdminRouterSimulationResponse(
+        success=True,
+        data=build_admin_router_simulation(body, user),
+    )
+
+
+@app.post("/api/admin-router/rotate", response_model=AdminRouterRotateResponse)
+def rotate_admin_router_key(
+    body: AdminRouterRotateRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> AdminRouterRotateResponse:
+    _require_admin_router_product(body.product_id, user)
+    return AdminRouterRotateResponse(
+        success=True,
+        data=build_admin_router_rotation(body, user),
     )
 
 
