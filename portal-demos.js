@@ -1122,23 +1122,187 @@
     });
   }
 
-  function demoDevopsLogs(root) {
+  function demoDevopsLogs(root, product) {
     root.innerHTML = shell("日志聚类与异常", (
-      '<div class="max-h-48 overflow-y-auto rounded-xl border border-slate-900 bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-300">' +
-      '<p data-log="1">2026-05-14T08:01:12Z ERROR payment-svc timeout upstream=db-primary</p>' +
-      '<p data-log="2">2026-05-14T08:01:13Z ERROR payment-svc timeout upstream=db-primary</p>' +
-      '<p data-log="3">2026-05-14T08:01:14Z WARN  cache-miss key=user:88421</p>' +
-      '<p data-log="4">2026-05-14T08:01:18Z ERROR payment-svc timeout upstream=db-primary</p>' +
+      '<div class="grid gap-4 sm:grid-cols-[1fr_1.1fr]">' +
+      '<div class="space-y-3">' +
+      '<p class="text-xs leading-relaxed text-slate-500">粘贴一段容器 / 中间件日志（每行一条），点击分析后将返回模板聚类与异常候选（演示级启发式）。</p>' +
+      '<label class="block text-xs font-medium text-slate-600">日志输入</label>' +
+      '<textarea data-field="logs" rows="9" class="w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-[12px] leading-relaxed outline-none ring-orange-500/20 transition focus:border-orange-500 focus:ring-4">' +
+      escapeHtml([
+        "2026-05-14T08:01:12Z ERROR payment-svc timeout upstream=db-primary",
+        "2026-05-14T08:01:13Z ERROR payment-svc timeout upstream=db-primary",
+        "2026-05-14T08:01:14Z WARN  cache-miss key=user:88421",
+        "2026-05-14T08:01:18Z ERROR payment-svc timeout upstream=db-primary",
+        "2026-05-14T08:02:03Z ERROR api-gw 502 upstream=inventory-svc req_id=3f0c1d9a-12ab-4cde-9f00-1a2b3c4d5e6f"
+      ].join("\\n")) +
+      '</textarea>' +
+      '<div class="flex flex-wrap items-center gap-2">' +
+      '<button type="button" data-action="analyze" class="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">分析日志</button>' +
+      '<button type="button" data-action="fill" class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">填充样例</button>' +
       "</div>" +
-      '<button type="button" data-action="cluster" class="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">聚类分析（模拟）</button>'
+      "</div>" +
+      '<div class="space-y-3">' +
+      '<div data-slot="out" class="rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700">' +
+      '<p class="text-xs text-slate-500">点击“分析日志”查看聚类与异常结果。</p>' +
+      "</div>" +
+      "</div>" +
+      "</div>"
     ));
-    bind(root, "[data-action=\"cluster\"]", "click", function () {
-      [1, 2, 4].forEach(function (id) {
-        var p = root.querySelector("[data-log=\"" + id + "\"]");
-        if (p) {
-          p.className = "rounded bg-orange-950/50 text-orange-200";
-        }
-      });
+
+    function apiBase() {
+      if (!window.location.host) return "http://127.0.0.1";
+      return "";
+    }
+
+    function splitLines(text) {
+      return String(text || "")
+        .split(/\\r?\\n/)
+        .map(function (x) { return x.trim(); })
+        .filter(Boolean)
+        .slice(0, 2000);
+    }
+
+    function renderTokens(tokens) {
+      var list = Array.isArray(tokens) ? tokens : [];
+      if (!list.length) return "";
+      return '<div class="mt-2 flex flex-wrap gap-1.5">' + list.map(function (t) {
+        return '<span class="rounded-lg bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800">' + escapeHtml(t) + "</span>";
+      }).join("") + "</div>";
+    }
+
+    function renderClusters(clusters) {
+      var list = Array.isArray(clusters) ? clusters : [];
+      if (!list.length) {
+        return '<p class="text-sm text-slate-500">未形成聚类（可尝试降低最小聚类阈值或提供更多相似日志）。</p>';
+      }
+      return '<div class="space-y-3">' + list.map(function (c) {
+        var examples = Array.isArray(c.examples) ? c.examples : [];
+        return (
+          '<div class="rounded-xl border border-slate-200 bg-white p-3">' +
+          '<div class="flex items-start justify-between gap-2">' +
+          '<p class="text-xs font-semibold text-slate-500">模板</p>' +
+          '<span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">x' + escapeHtml(String(c.count || 0)) + "</span>" +
+          "</div>" +
+          '<p class="mt-1 font-mono text-[12px] leading-relaxed text-slate-900">' + escapeHtml(c.template || "") + "</p>" +
+          renderTokens(c.tokens) +
+          (examples.length
+            ? '<p class="mt-3 text-xs font-semibold text-slate-500">样例</p>' +
+              '<ul class="mt-1 list-disc space-y-1 pl-5 text-xs text-slate-600">' +
+              examples.slice(0, 3).map(function (x) { return "<li>" + escapeHtml(x) + "</li>"; }).join("") +
+              "</ul>"
+            : "") +
+          "</div>"
+        );
+      }).join("") + "</div>";
+    }
+
+    function scoreBadge(score) {
+      var s = Number(score);
+      if (!Number.isFinite(s)) s = 0;
+      if (s >= 60) return "border-red-200 bg-red-50 text-red-700";
+      if (s >= 30) return "border-amber-200 bg-amber-50 text-amber-800";
+      return "border-slate-200 bg-slate-50 text-slate-700";
+    }
+
+    function renderAnomalies(anomalies) {
+      var list = Array.isArray(anomalies) ? anomalies : [];
+      if (!list.length) {
+        return '<p class="text-sm text-slate-500">未发现异常候选（演示算法）。</p>';
+      }
+      return '<div class="space-y-3">' + list.map(function (a) {
+        return (
+          '<div class="rounded-xl border border-slate-200 bg-white p-3">' +
+          '<div class="flex flex-wrap items-center justify-between gap-2">' +
+          '<p class="text-xs font-semibold text-slate-500">异常候选</p>' +
+          '<span class="rounded-full border px-2.5 py-1 text-xs font-medium ' + scoreBadge(a.score) + '">' +
+          "score " + escapeHtml(String(a.score || 0)) + "</span>" +
+          "</div>" +
+          '<p class="mt-1 text-xs text-slate-600">' + escapeHtml(a.reason || "") + "</p>" +
+          '<p class="mt-2 font-mono text-[12px] leading-relaxed text-slate-900">' + escapeHtml(a.log || "") + "</p>" +
+          '<details class="mt-2">' +
+          '<summary class="cursor-pointer text-xs text-slate-500 hover:text-slate-700">查看模板</summary>' +
+          '<p class="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-[11px] text-slate-700">' + escapeHtml(a.template || "") + "</p>" +
+          "</details>" +
+          "</div>"
+        );
+      }).join("") + "</div>";
+    }
+
+    bind(root, "[data-action=\"fill\"]", "click", function () {
+      var ta = root.querySelector("[data-field=\"logs\"]");
+      if (!ta) return;
+      ta.value = [
+        "2026-05-14T08:01:12Z ERROR payment-svc timeout upstream=db-primary",
+        "2026-05-14T08:01:13Z ERROR payment-svc timeout upstream=db-primary",
+        "2026-05-14T08:01:14Z WARN  cache-miss key=user:88421",
+        "2026-05-14T08:01:18Z ERROR payment-svc timeout upstream=db-primary",
+        "2026-05-14T08:02:03Z ERROR api-gw 502 upstream=inventory-svc req_id=3f0c1d9a-12ab-4cde-9f00-1a2b3c4d5e6f",
+        "2026-05-14T08:02:04Z ERROR inventory-svc connection refused host=10.0.0.8:5432"
+      ].join("\\n");
+    });
+
+    bind(root, "[data-action=\"analyze\"]", "click", function () {
+      var ta = root.querySelector("[data-field=\"logs\"]");
+      var out = root.querySelector("[data-slot=\"out\"]");
+      var btn = root.querySelector("[data-action=\"analyze\"]");
+      var token = localStorage.getItem("portal_token");
+      if (!ta || !out || !btn) return;
+      var logs = splitLines(ta.value);
+      if (!logs.length) {
+        out.className = "rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm text-red-700";
+        out.textContent = "请先输入日志（每行一条）。";
+        return;
+      }
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 分析中";
+      out.className = "rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700";
+      out.innerHTML = '<p class="flex items-center gap-2 text-sm text-slate-600">' + spinHtml() + " 正在调用后端接口进行聚类与异常检测…</p>";
+
+      fetch(apiBase() + "/api/log-insight/analyze", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product_id: product && product.id,
+          logs: logs,
+          top_k: 8,
+          anomaly_k: 6,
+          min_cluster_size: 2
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error((data && data.detail) || "分析失败");
+            return data;
+          });
+        })
+        .then(function (body) {
+          var data = (body && body.data) || {};
+          out.className = "rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700";
+          out.innerHTML =
+            '<div class="flex flex-wrap items-center justify-between gap-2">' +
+            '<p class="text-sm font-medium text-slate-900">分析结果</p>' +
+            '<p class="text-xs text-slate-500">总日志 ' + escapeHtml(String(data.total || 0)) +
+            " · 解析 " + escapeHtml(String(data.parsed || 0)) + "</p>" +
+            "</div>" +
+            '<div class="mt-4 grid gap-4">' +
+            '<div><p class="text-xs font-semibold text-slate-500">聚类（Top）</p>' +
+            '<div class="mt-2">' + renderClusters(data.clusters) + "</div></div>" +
+            '<div><p class="text-xs font-semibold text-slate-500">异常候选</p>' +
+            '<div class="mt-2">' + renderAnomalies(data.anomalies) + "</div></div>" +
+            "</div>";
+        })
+        .catch(function (ex) {
+          out.className = "rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm leading-relaxed text-red-700";
+          out.textContent = ex.message || "分析失败，请稍后重试。";
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "分析日志";
+        });
     });
   }
 

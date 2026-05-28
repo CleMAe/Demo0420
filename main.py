@@ -3035,3 +3035,261 @@ def frontend_asset(asset_path: str) -> FileResponse:
     if not path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
     return FileResponse(path)
+
+
+# -----------------------------------------------------------------------------
+# Product module: DevOps 日志洞察（仅追加实现；禁止改动现有代码）
+# -----------------------------------------------------------------------------
+
+
+from fastapi import Body
+import re
+from collections import Counter, defaultdict
+
+
+LOG_INSIGHT_PRODUCT_NAME = "DevOps 日志洞察"
+
+
+class LogInsightAnalyzeRequest(BaseModel):
+    product_id: int
+    logs: list[str] = Field(default_factory=list, max_length=2000)
+    top_k: int = Field(default=8, ge=1, le=30)
+    anomaly_k: int = Field(default=6, ge=0, le=30)
+    min_cluster_size: int = Field(default=2, ge=1, le=2000)
+
+
+class LogInsightClusterOut(BaseModel):
+    template: str
+    count: int
+    examples: list[str]
+    tokens: list[str] = Field(default_factory=list)
+
+
+class LogInsightAnomalyOut(BaseModel):
+    log: str
+    reason: str
+    template: str
+    score: float = Field(ge=0)
+
+
+class LogInsightAnalyzeData(BaseModel):
+    total: int
+    parsed: int
+    clusters: list[LogInsightClusterOut]
+    anomalies: list[LogInsightAnomalyOut]
+
+
+class LogInsightAnalyzeResponse(BaseModel):
+    success: bool
+    data: LogInsightAnalyzeData | None = None
+    message: str = ""
+
+
+_LOG_TEMPLATE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b[0-9a-f]{8,}\b", re.IGNORECASE), "<HEX>"),
+    (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE), "<UUID>"),
+    (re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b"), "<IP>"),
+    (re.compile(r"\b\d+\b"), "<NUM>"),
+    (re.compile(r"\b(?:/[\w\-.]+)+\b"), "<PATH>"),
+    (re.compile(r"\b[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\b"), "<EMAIL>"),
+]
+
+
+def _log_template(line: str) -> str:
+    s = (line or "").strip()
+    if not s:
+        return ""
+    for pat, rep in _LOG_TEMPLATE_PATTERNS:
+        s = pat.sub(rep, s)
+    s = re.sub(r"\s+", " ", s).strip()
+    # 限制模板长度，避免超长日志拖垮前端展示
+    if len(s) > 220:
+        s = s[:217] + "..."
+    return s
+
+
+def _template_tokens(tpl: str) -> list[str]:
+    words = re.findall(r"[A-Za-z_]{3,}", tpl)
+    stop = {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+        "that",
+        "error",
+        "warn",
+        "info",
+        "failed",
+        "failure",
+        "request",
+        "response",
+        "timeout",
+        "exception",
+    }
+    out: list[str] = []
+    for w in words:
+        lw = w.lower()
+        if lw in stop:
+            continue
+        out.append(lw)
+    # 去重但保持相对稳定顺序
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for t in out:
+        if t in seen:
+            continue
+        seen.add(t)
+        uniq.append(t)
+    return uniq[:12]
+
+
+def _require_log_insight_product(product_id: int, user: dict[str, Any]) -> sqlite3.Row:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != LOG_INSIGHT_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+    return row
+
+
+def _build_log_insight_analysis(
+    logs: list[str],
+    top_k: int,
+    anomaly_k: int,
+    min_cluster_size: int,
+) -> LogInsightAnalyzeData:
+    cleaned = [str(x).strip() for x in (logs or []) if str(x).strip()]
+    templates = [_log_template(x) for x in cleaned]
+    pairs = [(raw, tpl) for raw, tpl in zip(cleaned, templates, strict=False) if tpl]
+    tpl_counts = Counter([tpl for _raw, tpl in pairs])
+
+    # 聚类：按模板计数
+    tpl_examples: dict[str, list[str]] = defaultdict(list)
+    for raw, tpl in pairs:
+        if len(tpl_examples[tpl]) < 3:
+            tpl_examples[tpl].append(raw[:260] if len(raw) > 260 else raw)
+
+    clusters: list[LogInsightClusterOut] = []
+    for tpl, c in tpl_counts.most_common():
+        if c < min_cluster_size:
+            continue
+        clusters.append(
+            LogInsightClusterOut(
+                template=tpl,
+                count=int(c),
+                examples=tpl_examples.get(tpl, [])[:3],
+                tokens=_template_tokens(tpl),
+            )
+        )
+        if len(clusters) >= top_k:
+            break
+
+    # 异常：用“稀有模板 + 关键字”做启发式打分（演示用，非生产算法）
+    anomaly_keywords = (
+        "panic",
+        "fatal",
+        "segfault",
+        "oom",
+        "out of memory",
+        "connection refused",
+        "refused",
+        "deadline exceeded",
+        "timeout",
+        "rate limit",
+        "throttl",
+        "denied",
+        "unauthorized",
+        "forbidden",
+        "traceback",
+        "exception",
+        "crash",
+        "killed",
+        "evicted",
+        "disk full",
+        "i/o error",
+        "broken pipe",
+        "504",
+        "502",
+        "503",
+    )
+
+    anomalies_scored: list[tuple[float, LogInsightAnomalyOut]] = []
+    total = max(1, len(pairs))
+    for raw, tpl in pairs:
+        freq = tpl_counts.get(tpl, 0)
+        rarity = 1.0 - min(1.0, freq / max(1, int(total * 0.25)))
+        low_freq_boost = 1.0 if freq <= 2 else 0.0
+        text = raw.lower()
+        hits = [k for k in anomaly_keywords if k in text]
+        kw_score = min(1.0, 0.22 * len(hits)) if hits else 0.0
+        score = max(0.0, 0.55 * rarity + 0.30 * kw_score + 0.15 * low_freq_boost)
+        if score <= 0:
+            continue
+        reason = "稀有模板"
+        if hits:
+            reason = f"关键字命中：{', '.join(hits[:3])}"
+        anomalies_scored.append(
+            (
+                score,
+                LogInsightAnomalyOut(
+                    log=raw[:400] if len(raw) > 400 else raw,
+                    reason=reason,
+                    template=tpl,
+                    score=float(round(score * 100, 2)),
+                ),
+            )
+        )
+
+    anomalies_scored.sort(key=lambda x: x[0], reverse=True)
+    anomalies = [a for _s, a in anomalies_scored[:anomaly_k]]
+    return LogInsightAnalyzeData(
+        total=len(cleaned),
+        parsed=len(pairs),
+        clusters=clusters,
+        anomalies=anomalies,
+    )
+
+
+def log_insight_analyze(
+    body: LogInsightAnalyzeRequest = Body(...),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> LogInsightAnalyzeResponse:
+    _require_log_insight_product(body.product_id, user)
+    data = _build_log_insight_analysis(
+        logs=body.logs,
+        top_k=body.top_k,
+        anomaly_k=body.anomaly_k,
+        min_cluster_size=body.min_cluster_size,
+    )
+    return LogInsightAnalyzeResponse(success=True, data=data)
+
+
+def _add_priority_api_route(path: str, endpoint: Any, **kwargs: Any) -> None:
+    """
+    由于 main.py 末尾已有 `/{asset_path:path}` 兜底路由，追加的装饰器路由会被其抢先匹配。
+    这里通过“追加后再把 route 插到最前”确保新 API 可用，且不改动任何既有定义顺序。
+    """
+    app.add_api_route(path, endpoint, **kwargs)
+    try:
+        route = app.router.routes.pop()
+        app.router.routes.insert(0, route)
+    except Exception:
+        # 回退：即便插入失败，也至少注册了路由（极端情况下会被兜底路由覆盖）
+        pass
+
+
+_add_priority_api_route(
+    "/api/log-insight/analyze",
+    log_insight_analyze,
+    methods=["POST"],
+    response_model=LogInsightAnalyzeResponse,
+)
