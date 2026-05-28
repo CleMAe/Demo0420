@@ -6,8 +6,6 @@ services:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
         PIP_DEFAULT_TIMEOUT: ${PIP_DEFAULT_TIMEOUT:-120}
     container_name: portal-api
-    env_file:
-      - .env
     volumes:
       - portal-data:/data
     environment:

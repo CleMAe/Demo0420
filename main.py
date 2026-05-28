@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
+import re
 import sqlite3
 import urllib.error
 import urllib.request
+from functools import lru_cache
 
 from dotenv import load_dotenv
 
@@ -18,7 +21,7 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import bcrypt
 from jose import JWTError, jwt
@@ -34,6 +37,10 @@ PORTAL_BRAND_NAME = os.environ.get("PORTAL_BRAND_NAME", "智能体Demo平台")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 CUSTOMER_SCRIPT_PRODUCT_NAME = "客服话术优化"
+ENTERPRISE_GPT_PRODUCT_NAME = "企业 GPT 助手"
+COMPLIANCE_PRODUCT_NAME = "合规审查 AI"
+CLINICAL_PATHWAY_PRODUCT_NAME = "临床路径建议引擎"
+EMPLOYEE_TRAINING_PRODUCT_NAME = "员工自助：培训陪练"
 SMART_OFFICE_PRODUCT_NAME = "智能办公智能体"
 SMART_OFFICE_SCENARIOS: dict[str, str] = {
     "expense": "报销单据",
@@ -41,8 +48,9 @@ SMART_OFFICE_SCENARIOS: dict[str, str] = {
     "tender": "招标文件",
     "contract": "合同审核",
 }
-CLINICAL_PATHWAY_PRODUCT_NAME = "临床路径建议引擎"
 PROJECT_ROOT = Path(__file__).resolve().parent
+EMPLOYEE_HANDBOOK_PATH = PROJECT_ROOT / "docs" / "员工手册.md"
+COMPLIANCE_LIBRARY_PATH = PROJECT_ROOT / "docs" / "compliance.md"
 FRONTEND_ASSETS = {
     "": "index.html",
     "index.html": "index.html",
@@ -57,6 +65,8 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 
 security = HTTPBearer(auto_error=False)
+TRAINING_MEMORY_LIMIT = 24
+TRAINING_MEMORY: dict[str, list["EmployeeTrainingTurn"]] = {}
 
 # 演示账号（与下方初始化数据一致）；用于在升级依赖后修复历史库里损坏的密码哈希
 USERS_SEED: list[tuple[str, str, str | None]] = [
@@ -606,6 +616,136 @@ class SmartOfficeConfigOut(BaseModel):
     hint: str
 
 
+class EnterpriseGptSourceOut(BaseModel):
+    id: str
+    label: str
+    kind: str
+
+
+class EnterpriseGptSourcesData(BaseModel):
+    sources: list[EnterpriseGptSourceOut]
+    preset_questions: list[str]
+    handbook_available: bool
+
+
+class EnterpriseGptSourcesResponse(BaseModel):
+    success: bool
+    data: EnterpriseGptSourcesData | None = None
+    message: str = ""
+
+
+class EnterpriseGptAskRequest(BaseModel):
+    product_id: int
+    question: str = Field(min_length=1, max_length=500)
+    knowledge_line: str | None = Field(default=None, max_length=80)
+
+
+class EnterpriseGptCitation(BaseModel):
+    source_id: str
+    title: str
+    excerpt: str
+
+
+class EnterpriseGptAnswerData(BaseModel):
+    summary: str
+    citations: list[EnterpriseGptCitation]
+    visibility_role: str
+    knowledge_line: str
+    question: str
+
+
+class EnterpriseGptAskResponse(BaseModel):
+    success: bool
+    data: EnterpriseGptAnswerData | None = None
+    message: str = ""
+
+
+class ComplianceCategoryOut(BaseModel):
+    id: str
+    label: str
+    risky_count: int
+    safe_count: int
+
+
+class ComplianceSampleClauseOut(BaseModel):
+    clause_id: str
+    title: str
+    text: str
+
+
+class ComplianceSourcesData(BaseModel):
+    categories: list[ComplianceCategoryOut]
+    preset_samples: list[ComplianceSampleClauseOut]
+    library_available: bool
+    disclaimer: str
+
+
+class ComplianceSourcesResponse(BaseModel):
+    success: bool
+    data: ComplianceSourcesData | None = None
+    message: str = ""
+
+
+class ComplianceScanRequest(BaseModel):
+    product_id: int
+    category: str = Field(min_length=1, max_length=20)
+    clauses: list[str] = Field(min_length=1, max_length=20)
+
+
+class ComplianceScanResultOut(BaseModel):
+    input_text: str
+    matched_clause_id: str | None
+    matched_title: str | None
+    risk_level: str
+    risk_tags: list[str]
+    risk_summary: str
+    citation_title: str | None
+    citation_excerpt: str | None
+
+
+class ComplianceScanData(BaseModel):
+    category: str
+    results: list[ComplianceScanResultOut]
+    risky_count: int
+    safe_count: int
+    review_count: int
+    disclaimer: str
+
+
+class ComplianceScanResponse(BaseModel):
+    success: bool
+    data: ComplianceScanData | None = None
+    message: str = ""
+
+
+class EmployeeTrainingTurn(BaseModel):
+    role: str = Field(min_length=1, max_length=20)
+    content: str = Field(min_length=1, max_length=800)
+
+
+class EmployeeTrainingRequest(BaseModel):
+    product_id: int
+    user_message: str = Field(min_length=1, max_length=800)
+    round: int = Field(default=0, ge=0, le=30)
+    session_id: str | None = Field(default=None, max_length=80)
+    history: list[EmployeeTrainingTurn] = Field(default_factory=list)
+
+
+class EmployeeTrainingReply(BaseModel):
+    phase: str
+    role: str
+    reply: str
+    score: int | None = None
+    signals: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+
+
+class EmployeeTrainingResponse(BaseModel):
+    success: bool
+    data: EmployeeTrainingReply | None = None
+    message: str = ""
+
+
 class ClinicalPathwayRequest(BaseModel):
     product_id: int
     condition: str = Field(min_length=1, max_length=40)
@@ -749,6 +889,135 @@ def _normalize_customer_script_suggestion(raw: dict[str, Any]) -> CustomerScript
         escalation=str(raw.get("escalation") or "若客户持续强烈投诉，升级给主管处理。").strip(),
         forbidden_words=_string_list(raw.get("forbidden_words"), ["这不是我们的问题", "你自己看规则"]),
     )
+
+
+def build_employee_training_reply(
+    user_message: str,
+    round_no: int,
+    history: list[EmployeeTrainingTurn],
+) -> EmployeeTrainingReply:
+    text = user_message.strip()
+    lower = text.lower()
+    history_text = " ".join(turn.content for turn in history[-8:])
+    combined = f"{history_text} {text}".lower()
+
+    compliance_ok = any(
+        word in combined
+        for word in ("合规", "合同", "书面", "不能", "无法承诺", "不私下", "poc", "正式流程")
+    )
+    value_signal = any(
+        word in combined
+        for word in ("价值", "roi", "tco", "案例", "数据", "sla", "运维", "风险共担")
+    )
+    price_only = any(word in combined for word in ("降价", "打折", "便宜", "回扣"))
+
+    if "/end" in lower:
+        score = 55
+        signals: list[str] = []
+        suggestions: list[str] = []
+        if value_signal:
+            score += 20
+            signals.append("使用价值锚点回应价格异议")
+        else:
+            suggestions.append("价格异议中补充 ROI/TCO、客户案例或 SLA 保障")
+        if compliance_ok:
+            score += 20
+            signals.append("明确拒绝私下承诺并回到正式流程")
+        else:
+            suggestions.append("遇到保底、回扣、口头承诺时先明确合规边界")
+        if price_only:
+            score -= 15
+            suggestions.append("避免把谈判带入单纯降价或回扣表达")
+        score = max(0, min(100, score))
+        risk = "绿灯" if compliance_ok else "红线高危"
+        reply = (
+            "### 演练结束！AI 教练复盘报告\n"
+            f"- 综合评分：{score} / 100\n"
+            f"- 合规风险：{risk}\n"
+            f"- 命中要点：{'、'.join(signals) if signals else '暂未识别到关键优势话术'}\n"
+            f"- 优化建议：{'；'.join(suggestions) if suggestions else '继续保持价值表达和合规边界'}\n"
+            "- 推荐话术：李总，效果我们建议通过正式 PoC 和合同条款验证，所有承诺都写入书面文件，"
+            "这既保护贵司权益，也保证双方合作边界清晰。"
+        )
+        return EmployeeTrainingReply(
+            phase="report",
+            role="coach",
+            reply=reply,
+            score=score,
+            signals=signals,
+            suggestions=suggestions,
+        )
+
+    if round_no <= 1:
+        reply = "你们方案听起来不错，但竞品报价比你们低 15%。如果你只能讲概念，我很难往下推进。"
+    elif not compliance_ok and any(word in combined for word in ("效果", "保证", "承诺", "保底", "kpi")):
+        reply = "那你私下给我保个底吧，效果达不到就全额退款，这个不用写合同里。你能不能点头？"
+    elif compliance_ok:
+        reply = "行，至少你没有乱承诺。那你把 PoC 验证范围、成功指标和合同条款边界整理出来，我再让团队评估。"
+    elif value_signal:
+        reply = "价值账我听懂了一点，但你还没解释清楚失败风险怎么兜底。别只讲好处，讲讲边界。"
+    else:
+        reply = "这回答还是偏虚。你得具体说清楚能省多少钱、怎么验证，以及哪些承诺不能做。"
+
+    suggestions = ["用客户业务指标表达价值", "把效果验证落到 PoC 或书面合同", "遇到私下承诺要明确拒绝"]
+    return EmployeeTrainingReply(
+        phase="roleplay",
+        role="customer",
+        reply=reply,
+        signals=[signal for signal, ok in (("价值锚点", value_signal), ("合规边界", compliance_ok)) if ok],
+        suggestions=suggestions,
+    )
+
+
+def _normalize_employee_training_reply(raw: dict[str, Any]) -> EmployeeTrainingReply:
+    phase = str(raw.get("phase") or "").strip()
+    if phase not in {"roleplay", "report"}:
+        phase = "report" if raw.get("score") is not None else "roleplay"
+    role = str(raw.get("role") or "").strip()
+    if not role:
+        role = "coach" if phase == "report" else "customer"
+    return EmployeeTrainingReply(
+        phase=phase,
+        role=role,
+        reply=str(raw.get("reply") or "我需要更具体的信息，才能继续推进这轮陪练。").strip(),
+        score=None if raw.get("score") is None else _clamp_score(raw.get("score"), 60),
+        signals=_string_list(raw.get("signals"), []),
+        suggestions=_string_list(raw.get("suggestions"), []),
+    )
+
+
+def _training_memory_key(user: dict[str, Any], session_id: str | None) -> str | None:
+    clean_session = (session_id or "").strip()
+    if not clean_session:
+        return None
+    return f"{user['username']}:{clean_session}"
+
+
+def _employee_training_history(
+    body: EmployeeTrainingRequest,
+    user: dict[str, Any],
+) -> tuple[str | None, list[EmployeeTrainingTurn]]:
+    key = _training_memory_key(user, body.session_id)
+    if key and key in TRAINING_MEMORY:
+        return key, list(TRAINING_MEMORY[key])
+    return key, list(body.history[-TRAINING_MEMORY_LIMIT:])
+
+
+def _remember_employee_training_turn(
+    key: str | None,
+    user_message: str,
+    reply: EmployeeTrainingReply,
+) -> None:
+    if not key:
+        return
+    turns = TRAINING_MEMORY.setdefault(key, [])
+    turns.append(EmployeeTrainingTurn(role="user", content=user_message))
+    turns.append(EmployeeTrainingTurn(role=reply.role, content=reply.reply))
+    del turns[:-TRAINING_MEMORY_LIMIT]
+
+
+def _sse_event(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def _clinical_pathway_risk_level(text: str) -> str:
@@ -996,6 +1265,582 @@ def smart_office_runtime_config() -> SmartOfficeConfigOut:
     )
 
 
+ENTERPRISE_GPT_SOURCES: list[tuple[str, str, str]] = [
+    ("handbook", "制度 · 员工手册.md", "policy"),
+    ("ticket-hr", "工单 · HR-0420", "ticket"),
+    ("project-portal", "项目文档 · 门户集成说明", "project"),
+]
+
+ENTERPRISE_GPT_PRESET_QUESTIONS: list[str] = [
+    "新员工如何申请年假？",
+    "差旅报销要在多久内提交？",
+    "员工能否把内部文档上传到外部大模型？",
+]
+
+OA_FLOW_CITATIONS: dict[str, tuple[str, str]] = {
+    "leave": (
+        "oa-flow-leave",
+        "引用 · OA 流程说明（附录）",
+        "流程名称：休假申请 · 适用场景：年假、调休 · 审批节点：直属主管。",
+    ),
+    "expense": (
+        "oa-flow-expense",
+        "引用 · OA 流程说明（附录）",
+        "流程名称：费用报销 · 适用场景：差旅及业务招待 · 审批节点：直属主管 → 财务",
+    ),
+}
+
+
+@lru_cache(maxsize=1)
+def _load_employee_handbook() -> str:
+    if not EMPLOYEE_HANDBOOK_PATH.is_file():
+        return ""
+    return EMPLOYEE_HANDBOOK_PATH.read_text(encoding="utf-8")
+
+
+def _extract_markdown_section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    start: int | None = None
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == heading or stripped.startswith(heading + " "):
+            start = index + 1
+            break
+    if start is None:
+        return ""
+    body: list[str] = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if stripped.startswith("### ") or (
+            stripped.startswith("## ") and not stripped.startswith("### ")
+        ):
+            break
+        if stripped == "---":
+            break
+        if stripped:
+            body.append(re.sub(r"\*\*", "", line.rstrip()))
+    return "\n".join(body).strip()
+
+
+def _visibility_role_label(role: str) -> str:
+    return {
+        "ADMIN": "全员（ADMIN）",
+        "Director": "部门总监（Director）",
+        "USER": "普通员工（USER）",
+    }.get(role, role)
+
+
+def _default_knowledge_line(question: str) -> str:
+    if re.search(r"报销|差旅|费用", question):
+        return "运营 · 流程与报销"
+    if re.search(r"保密|上传|大模型|文档", question):
+        return "法务 · 保密与合规"
+    return "人力 · 制度与休假"
+
+
+def _require_enterprise_gpt_product(
+    product_id: int,
+    user: dict[str, Any],
+) -> sqlite3.Row:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != ENTERPRISE_GPT_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="产品不存在或无权访问",
+        )
+    return row
+
+
+def _handbook_citation(section_key: str, title: str, fallback: str) -> EnterpriseGptCitation:
+    handbook = _load_employee_handbook()
+    excerpt = ""
+    if section_key == "3.2":
+        excerpt = _extract_markdown_section(handbook, "### 3.2 带薪年假")
+    elif section_key == "4.2":
+        for line in handbook.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("4.2 "):
+                excerpt = re.sub(r"\*\*", "", stripped)
+                break
+    elif section_key == "5.2":
+        for line in handbook.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("5.2 "):
+                excerpt = re.sub(r"\*\*", "", stripped)
+                break
+    if not excerpt:
+        excerpt = fallback
+    return EnterpriseGptCitation(
+        source_id=f"handbook-{section_key}",
+        title=title,
+        excerpt=excerpt,
+    )
+
+
+def _oa_flow_citation(flow_key: str) -> EnterpriseGptCitation:
+    source_id, title, excerpt = OA_FLOW_CITATIONS[flow_key]
+    return EnterpriseGptCitation(source_id=source_id, title=title, excerpt=excerpt)
+
+
+def build_enterprise_gpt_answer(
+    question: str,
+    knowledge_line: str | None,
+    visibility_role: str,
+) -> EnterpriseGptAnswerData:
+    line = (knowledge_line or "").strip() or _default_knowledge_line(question)
+    citations: list[EnterpriseGptCitation] = []
+
+    if re.search(r"年假|休假|请假", question):
+        summary = (
+            "根据《员工手册》第 3.2 节（带薪年假）：年假须提前在 OA 提交「休假申请」，"
+            "经直属主管审批后方可休假；当年额度按司龄折算（满 1 年不满 10 年为 5 天/年，以此类推）。"
+            "未休完年假最多可顺延至次年 3 月 31 日。"
+        )
+        citations = [
+            _handbook_citation(
+                "3.2",
+                "引用 · 员工手册.md §3.2",
+                "3.2.1 申请方式：员工休带薪年假，须提前在 OA 提交「休假申请」。"
+                "3.2.2 审批流程：申请经直属主管审批后方可休假。"
+                "3.2.3 额度计算：当年年假额度按司龄折算。",
+            ),
+            _oa_flow_citation("leave"),
+        ]
+    elif re.search(r"报销|差旅|费用", question):
+        summary = (
+            "根据《员工手册》第 4.2 节：差旅报销须在出差结束后 10 个工作日内，"
+            "在 OA「费用报销」流程提交发票与行程说明，经直属主管及财务审核。"
+        )
+        citations = [
+            _handbook_citation(
+                "4.2",
+                "引用 · 员工手册.md §4.2",
+                "4.2 差旅报销须在出差结束后 10 个工作日内，在 OA「费用报销」流程中提交发票与行程说明，"
+                "经直属主管及财务审核。",
+            ),
+            _oa_flow_citation("expense"),
+        ]
+    elif re.search(r"保密|上传|大模型|文档", question):
+        summary = (
+            "根据《员工手册》第 5.2 节：禁止将公司内部文档、代码仓库、客户名单上传至个人网盘或"
+            "外部大模型公共服务；经信息安全部审批的私有化部署除外。"
+            "对外宣传涉及公司业务须经品牌与公关部门书面同意。"
+        )
+        citations = [
+            _handbook_citation(
+                "5.2",
+                "引用 · 员工手册.md §5.2",
+                "5.2 禁止将公司内部文档、代码仓库、客户名单上传至个人网盘或外部大模型公共服务"
+                "（经信息安全部审批的私有化部署除外）。",
+            ),
+            EnterpriseGptCitation(
+                source_id="cross-compliance",
+                title="引用 · 合规审查 AI（交叉索引 · 模拟）",
+                excerpt=(
+                    "与合同及政策条款风险扫描模块联动时，可标注「数据出境 / 第三方 AI 服务」类风险提示（演示占位）。"
+                ),
+            ),
+        ]
+    else:
+        summary = (
+            "已在制度库、工单库与项目文档索引中检索到相关片段（模拟）。"
+            "建议缩小问题范围，或从预设问题中选择人力/法务/运营常见场景。"
+        )
+        citations = [
+            EnterpriseGptCitation(
+                source_id="handbook-toc",
+                title="引用 · 员工手册.md（目录）",
+                excerpt="第三章 考勤与休假 · 第四章 薪酬福利 · 第五章 行为规范与保密",
+            )
+        ]
+
+    return EnterpriseGptAnswerData(
+        summary=summary,
+        citations=citations,
+        visibility_role=visibility_role,
+        knowledge_line=line,
+        question=question,
+    )
+
+
+COMPLIANCE_CATEGORIES: list[tuple[str, str]] = [
+    ("contract", "合同"),
+    ("procurement", "采购"),
+    ("commitment", "对外承诺"),
+]
+
+COMPLIANCE_DEMO_CLAUSE_IDS: dict[str, list[str]] = {
+    "合同": ["合同-001", "合同-002", "合同-003"],
+    "采购": ["采购-001", "采购-002", "采购-003"],
+    "对外承诺": ["承诺-001", "承诺-002", "承诺-003"],
+}
+
+COMPLIANCE_DISCLAIMER = (
+    "本演示系统使用的合同、采购及承诺样例均为虚构模拟数据，不构成法律意见、"
+    "投资建议或商业决策依据；正式使用前须经法务及合规部门复核。"
+)
+
+COMPLIANCE_CLAUSE_BLOCK_RE = re.compile(
+    r"^#### ((?:合同|采购|承诺)-\d+) · (.+)\n"
+    r"\*\*风险标注：\*\* ([^\n]+)\n"
+    r"\*\*条款文本：\*\* ([^\n]+)",
+    re.MULTILINE,
+)
+
+
+@dataclass(frozen=True)
+class ComplianceClause:
+    clause_id: str
+    title: str
+    category: str
+    risk_level: str
+    risk_tags: list[str]
+    text: str
+
+
+def _compliance_category_from_clause_id(clause_id: str) -> str:
+    if clause_id.startswith("合同-"):
+        return "合同"
+    if clause_id.startswith("采购-"):
+        return "采购"
+    return "对外承诺"
+
+
+def _parse_compliance_risk_annotation(raw: str) -> tuple[str, list[str]]:
+    parts = [part.strip() for part in raw.split("·") if part.strip()]
+    if not parts:
+        return "待复核", []
+    risk_level = parts[0]
+    tags = parts[1:]
+    return risk_level, tags
+
+
+def _parse_compliance_library(text: str) -> list[ComplianceClause]:
+    clauses: list[ComplianceClause] = []
+    for match in COMPLIANCE_CLAUSE_BLOCK_RE.finditer(text):
+        clause_id, title, risk_raw, clause_text = match.groups()
+        risk_level, risk_tags = _parse_compliance_risk_annotation(risk_raw)
+        clauses.append(
+            ComplianceClause(
+                clause_id=clause_id.strip(),
+                title=title.strip(),
+                category=_compliance_category_from_clause_id(clause_id.strip()),
+                risk_level=risk_level,
+                risk_tags=risk_tags,
+                text=clause_text.strip(),
+            )
+        )
+    return clauses
+
+
+@lru_cache(maxsize=1)
+def _load_compliance_clauses() -> tuple[ComplianceClause, ...]:
+    if not COMPLIANCE_LIBRARY_PATH.is_file():
+        return ()
+    text = COMPLIANCE_LIBRARY_PATH.read_text(encoding="utf-8")
+    return tuple(_parse_compliance_library(text))
+
+
+def _normalize_clause_text(text: str) -> str:
+    cleaned = re.sub(r"\s+", "", (text or "").strip())
+    cleaned = re.sub(r"[，。；：、（）()「」\"'“”‘’\-\*]", "", cleaned)
+    return cleaned
+
+
+def _clause_overlap_score(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    if left in right or right in left:
+        return min(len(left), len(right)) / max(len(left), len(right))
+    left_chars = set(left)
+    right_chars = set(right)
+    if not left_chars or not right_chars:
+        return 0.0
+    return len(left_chars & right_chars) / len(left_chars | right_chars)
+
+
+def _match_compliance_clause(
+    input_text: str,
+    library: tuple[ComplianceClause, ...],
+    category: str,
+) -> ComplianceClause | None:
+    normalized_input = _normalize_clause_text(input_text)
+    if not normalized_input:
+        return None
+
+    candidates = [clause for clause in library if clause.category == category]
+    if not candidates:
+        return None
+
+    for clause in candidates:
+        if _normalize_clause_text(clause.text) == normalized_input:
+            return clause
+
+    best: ComplianceClause | None = None
+    best_score = 0.0
+    for clause in candidates:
+        score = _clause_overlap_score(normalized_input, _normalize_clause_text(clause.text))
+        if score > best_score:
+            best_score = score
+            best = clause
+
+    if best is not None and best_score >= 0.45:
+        return best
+    return None
+
+
+def _compliance_risk_summary(clause: ComplianceClause) -> str:
+    if clause.risk_level == "无风险":
+        primary = clause.risk_tags[0] if clause.risk_tags else "符合模板"
+        return f"{primary}：{clause.title}"
+    primary = clause.risk_tags[0] if clause.risk_tags else clause.risk_level
+    return f"{primary}：{clause.title}"
+
+
+def _compliance_citation(clause: ComplianceClause) -> tuple[str, str]:
+    tags = " · ".join(clause.risk_tags) if clause.risk_tags else clause.risk_level
+    excerpt = (
+        f"{clause.clause_id} · {clause.title}\n"
+        f"风险标注：{clause.risk_level} · {tags}\n"
+        f"条款文本：{clause.text}"
+    )
+    return f"引用 · compliance.md · {clause.clause_id}", excerpt
+
+
+def _compliance_category_counts(
+    library: tuple[ComplianceClause, ...],
+) -> dict[str, tuple[int, int]]:
+    counts: dict[str, tuple[int, int]] = {
+        label: (0, 0) for _, label in COMPLIANCE_CATEGORIES
+    }
+    for clause in library:
+        risky, safe = counts.get(clause.category, (0, 0))
+        if clause.risk_level == "无风险":
+            counts[clause.category] = (risky, safe + 1)
+        else:
+            counts[clause.category] = (risky + 1, safe)
+    return counts
+
+
+def _compliance_clause_map(
+    library: tuple[ComplianceClause, ...],
+) -> dict[str, ComplianceClause]:
+    return {clause.clause_id: clause for clause in library}
+
+
+def _compliance_preset_samples(
+    library: tuple[ComplianceClause, ...],
+    category: str,
+) -> list[ComplianceSampleClauseOut]:
+    clause_map = _compliance_clause_map(library)
+    samples: list[ComplianceSampleClauseOut] = []
+    for clause_id in COMPLIANCE_DEMO_CLAUSE_IDS.get(category, []):
+        clause = clause_map.get(clause_id)
+        if clause is None:
+            continue
+        samples.append(
+            ComplianceSampleClauseOut(
+                clause_id=clause.clause_id,
+                title=clause.title,
+                text=clause.text,
+            )
+        )
+    return samples
+
+
+def _require_compliance_product(
+    product_id: int,
+    user: dict[str, Any],
+) -> sqlite3.Row:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != COMPLIANCE_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="产品不存在或无权访问",
+        )
+    return row
+
+
+def build_compliance_sources(category: str | None = None) -> ComplianceSourcesData:
+    library = _load_compliance_clauses()
+    counts = _compliance_category_counts(library)
+    selected = (category or "合同").strip() or "合同"
+    if selected not in counts:
+        selected = "合同"
+    return ComplianceSourcesData(
+        categories=[
+            ComplianceCategoryOut(
+                id=category_id,
+                label=label,
+                risky_count=counts.get(label, (0, 0))[0],
+                safe_count=counts.get(label, (0, 0))[1],
+            )
+            for category_id, label in COMPLIANCE_CATEGORIES
+        ],
+        preset_samples=_compliance_preset_samples(library, selected),
+        library_available=bool(library),
+        disclaimer=COMPLIANCE_DISCLAIMER,
+    )
+
+
+def build_compliance_scan(
+    category: str,
+    clauses: list[str],
+) -> ComplianceScanData:
+    library = _load_compliance_clauses()
+    results: list[ComplianceScanResultOut] = []
+    risky_count = 0
+    safe_count = 0
+    review_count = 0
+
+    for raw_clause in clauses:
+        input_text = raw_clause.strip()
+        if not input_text:
+            continue
+        matched = _match_compliance_clause(input_text, library, category)
+        if matched is None:
+            review_count += 1
+            results.append(
+                ComplianceScanResultOut(
+                    input_text=input_text,
+                    matched_clause_id=None,
+                    matched_title=None,
+                    risk_level="待复核",
+                    risk_tags=["未命中条款库"],
+                    risk_summary="未在演示条款库中命中，建议人工复核",
+                    citation_title=None,
+                    citation_excerpt=None,
+                )
+            )
+            continue
+
+        citation_title, citation_excerpt = _compliance_citation(matched)
+        risk_summary = _compliance_risk_summary(matched)
+        if matched.risk_level == "无风险":
+            safe_count += 1
+        elif matched.risk_level == "有风险":
+            risky_count += 1
+        else:
+            review_count += 1
+
+        results.append(
+            ComplianceScanResultOut(
+                input_text=input_text,
+                matched_clause_id=matched.clause_id,
+                matched_title=matched.title,
+                risk_level=matched.risk_level,
+                risk_tags=list(matched.risk_tags),
+                risk_summary=risk_summary,
+                citation_title=citation_title,
+                citation_excerpt=citation_excerpt,
+            )
+        )
+
+    return ComplianceScanData(
+        category=category,
+        results=results,
+        risky_count=risky_count,
+        safe_count=safe_count,
+        review_count=review_count,
+        disclaimer=COMPLIANCE_DISCLAIMER,
+    )
+
+def request_deepseek_employee_training(
+    user_message: str,
+    round_no: int,
+    history: list[EmployeeTrainingTurn],
+) -> EmployeeTrainingReply:
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not api_key:
+        raise DeepSeekConfigError("未配置 DeepSeek API Key")
+
+    base_url = os.environ.get("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL).rstrip("/")
+    model = os.environ.get("DEEPSEEK_MODEL", DEEPSEEK_MODEL).strip() or DEEPSEEK_MODEL
+    timeout = float(os.environ.get("DEEPSEEK_TIMEOUT", "20"))
+    history_payload = [
+        {"role": turn.role, "content": turn.content}
+        for turn in history[-12:]
+    ]
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是企业员工培训陪练系统，负责销售和合规场景演练。"
+                    "默认扮演刁钻客户李总，回复要像真实商务聊天，每次 2-3 句话。"
+                    "你需要在多轮对话中制造价格异议、竞品压价、效果承诺、私下保底或回扣等合规陷阱。"
+                    "当用户消息包含 /end 时，切换为 AI 教练，输出复盘报告。"
+                    "只输出 JSON 对象，不要输出 Markdown 代码块。字段必须包含："
+                    "phase、role、reply、score、signals、suggestions。"
+                    "phase 只能是 roleplay 或 report；role 使用 customer 或 coach；"
+                    "reply 是中文回复；score 在 report 阶段为 0-100 整数，roleplay 阶段可为 null；"
+                    "signals 和 suggestions 必须是字符串数组。"
+                    "复盘必须评估销售技巧和合规风险，明确指出是否踩中口头承诺、私下保底、回扣等红线。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "round": round_no,
+                        "history": history_payload,
+                        "user_message": user_message,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+        "temperature": 0.6,
+        "max_tokens": 900,
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")[:300]
+        raise DeepSeekResponseError(f"DeepSeek API 返回错误：{exc.code} {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise DeepSeekResponseError(f"DeepSeek API 请求失败：{exc.reason}") from exc
+    except TimeoutError as exc:
+        raise DeepSeekResponseError("DeepSeek API 请求超时") from exc
+
+    try:
+        data = json.loads(body)
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise DeepSeekResponseError("DeepSeek API 响应结构异常") from exc
+    return _normalize_employee_training_reply(_json_object_from_text(content))
+
+
 # -----------------------------------------------------------------------------
 # App
 # -----------------------------------------------------------------------------
@@ -1181,6 +2026,163 @@ def review_smart_office(
         ) from exc
 
     return SmartOfficeReviewResponse(success=True, data=result)
+
+
+@app.get("/api/enterprise-gpt/sources", response_model=EnterpriseGptSourcesResponse)
+def enterprise_gpt_sources(
+    product_id: int,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> EnterpriseGptSourcesResponse:
+    _require_enterprise_gpt_product(product_id, user)
+    return EnterpriseGptSourcesResponse(
+        success=True,
+        data=EnterpriseGptSourcesData(
+            sources=[
+                EnterpriseGptSourceOut(id=source_id, label=label, kind=kind)
+                for source_id, label, kind in ENTERPRISE_GPT_SOURCES
+            ],
+            preset_questions=list(ENTERPRISE_GPT_PRESET_QUESTIONS),
+            handbook_available=EMPLOYEE_HANDBOOK_PATH.is_file(),
+        ),
+    )
+
+
+@app.post("/api/enterprise-gpt/ask", response_model=EnterpriseGptAskResponse)
+def enterprise_gpt_ask(
+    body: EnterpriseGptAskRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> EnterpriseGptAskResponse:
+    _require_enterprise_gpt_product(body.product_id, user)
+    if not EMPLOYEE_HANDBOOK_PATH.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="员工手册知识库文件不可用",
+        )
+    answer = build_enterprise_gpt_answer(
+        body.question.strip(),
+        body.knowledge_line,
+        _visibility_role_label(user["role"]),
+    )
+    return EnterpriseGptAskResponse(success=True, data=answer)
+
+
+@app.post("/api/compliance/scan", response_model=ComplianceScanResponse)
+def compliance_scan(
+    body: ComplianceScanRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> ComplianceScanResponse:
+    _require_compliance_product(body.product_id, user)
+    if not COMPLIANCE_LIBRARY_PATH.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="合规条款库文件不可用",
+        )
+    category = body.category.strip()
+    allowed = {label for _, label in COMPLIANCE_CATEGORIES}
+    if category not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="条款类别无效",
+        )
+    clauses = [clause.strip() for clause in body.clauses if clause.strip()]
+    if not clauses:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="请至少提供一条待扫描条款",
+        )
+    data = build_compliance_scan(category, clauses)
+    return ComplianceScanResponse(success=True, data=data)
+
+
+@app.get("/api/compliance/sources", response_model=ComplianceSourcesResponse)
+def compliance_sources(
+    product_id: int,
+    category: str | None = None,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> ComplianceSourcesResponse:
+    _require_compliance_product(product_id, user)
+    return ComplianceSourcesResponse(
+        success=True,
+        data=build_compliance_sources(category),
+    )
+
+
+@app.post("/api/employee-training/respond", response_model=EmployeeTrainingResponse)
+def respond_employee_training(
+    body: EmployeeTrainingRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> EmployeeTrainingResponse:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (body.product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != EMPLOYEE_TRAINING_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+
+    memory_key, history = _employee_training_history(body, user)
+    try:
+        reply = request_deepseek_employee_training(body.user_message, body.round, history)
+    except DeepSeekConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except DeepSeekResponseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    _remember_employee_training_turn(memory_key, body.user_message, reply)
+    return EmployeeTrainingResponse(success=True, data=reply)
+
+
+@app.post("/api/employee-training/respond/stream")
+def stream_employee_training(
+    body: EmployeeTrainingRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> StreamingResponse:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (body.product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != EMPLOYEE_TRAINING_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+
+    def event_stream() -> Any:
+        memory_key, history = _employee_training_history(body, user)
+        yield _sse_event(
+            "status",
+            {"message": "已读取会话记忆，正在请求 DeepSeek", "memory_turns": len(history)},
+        )
+        try:
+            reply = request_deepseek_employee_training(body.user_message, body.round, history)
+            _remember_employee_training_turn(memory_key, body.user_message, reply)
+            yield _sse_event(
+                "result",
+                EmployeeTrainingResponse(success=True, data=reply).model_dump(),
+            )
+        except DeepSeekConfigError as exc:
+            yield _sse_event("error", {"message": str(exc), "status_code": 503})
+        except DeepSeekResponseError as exc:
+            yield _sse_event("error", {"message": str(exc), "status_code": 502})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/clinical-pathway/suggest", response_model=ClinicalPathwayResponse)
