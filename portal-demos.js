@@ -1632,34 +1632,16 @@
     });
   }
 
-  function demoSmartOffice(root) {
-    root.innerHTML = shell("多流程文档审查", (
-      '<div class="flex flex-wrap gap-2 border-b border-slate-100 pb-3">' +
-      ["报销单据", "简历筛选", "招标文件", "合同审核"].map(function (t, i) {
-        return (
-          '<button type="button" data-tab="' + i + '" class="rounded-full px-3 py-1 text-xs font-medium ' +
-          (i === 0 ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200") + '">' +
-          escapeHtml(t) + "</button>"
-        );
-      }).join("") +
-      "</div>" +
-      '<div data-panel="0" class="mt-3 text-sm text-slate-700">差旅餐费超标 12%，缺少招待对象说明（模拟规则命中）。</div>' +
-      '<div data-panel="1" class="mt-3 hidden text-sm text-slate-700">简历与 JD 匹配度 76%：后端经验充分，行业经验偏弱（模拟）。</div>' +
-      '<div data-panel="2" class="mt-3 hidden text-sm text-slate-700">与历史中标方案相似度 18%，未发现明显串标片段（模拟）。</div>' +
-      '<div data-panel="3" class="mt-3 hidden text-sm text-slate-700">责任上限条款与模板不一致，建议法务复核（模拟）。</div>'
+  function demoSmartOffice(root, product) {
+    var href = "smart-office.html";
+    if (product && product.id) {
+      href += "?id=" + encodeURIComponent(String(product.id));
+    }
+    root.innerHTML = shell("智能办公工作台（独立页面）", (
+      '<p class="text-sm leading-relaxed text-slate-600">本模块提供独立工作台页面，通过服务端 DeepSeek 大模型完成报销、简历、招标、合同等多场景文档审查。</p>' +
+      '<p class="mt-2 text-xs text-slate-500">请在 Docker 环境变量或项目根目录 <code class="rounded bg-slate-100 px-1">.env</code> 中配置 <code class="rounded bg-slate-100 px-1">DEEPSEEK_API_KEY</code> 后使用。</p>' +
+      '<a href="' + href + '" class="mt-4 inline-flex items-center rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600">进入智能办公工作台</a>'
     ));
-    root.querySelectorAll("[data-tab]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var i = btn.getAttribute("data-tab");
-        root.querySelectorAll("[data-tab]").forEach(function (b) {
-          b.className = "rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200";
-        });
-        btn.className = "rounded-full bg-orange-500 px-3 py-1 text-xs font-medium text-white";
-        root.querySelectorAll("[data-panel]").forEach(function (p) {
-          p.classList.toggle("hidden", p.getAttribute("data-panel") !== i);
-        });
-      });
-    });
   }
 
   function demoLongContextQa(root) {

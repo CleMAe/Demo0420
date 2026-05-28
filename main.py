@@ -17,7 +17,7 @@ load_dotenv()
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,6 +41,13 @@ ENTERPRISE_GPT_PRODUCT_NAME = "企业 GPT 助手"
 COMPLIANCE_PRODUCT_NAME = "合规审查 AI"
 CLINICAL_PATHWAY_PRODUCT_NAME = "临床路径建议引擎"
 EMPLOYEE_TRAINING_PRODUCT_NAME = "员工自助：培训陪练"
+SMART_OFFICE_PRODUCT_NAME = "智能办公智能体"
+SMART_OFFICE_SCENARIOS: dict[str, str] = {
+    "expense": "报销单据",
+    "resume": "简历筛选",
+    "tender": "招标文件",
+    "contract": "合同审核",
+}
 PROJECT_ROOT = Path(__file__).resolve().parent
 EMPLOYEE_HANDBOOK_PATH = PROJECT_ROOT / "docs" / "员工手册.md"
 COMPLIANCE_LIBRARY_PATH = PROJECT_ROOT / "docs" / "compliance.md"
@@ -49,8 +56,10 @@ FRONTEND_ASSETS = {
     "index.html": "index.html",
     "login.html": "login.html",
     "detail.html": "detail.html",
+    "smart-office.html": "smart-office.html",
     "portal-brand.js": "portal-brand.js",
     "portal-demos.js": "portal-demos.js",
+    "smart-office.js": "smart-office.js",
 }
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
@@ -262,7 +271,7 @@ PRODUCTS_SEED: list[tuple[str, str, str, str | None, list[str], str | None, str,
     (
         "智能办公智能体",
         "多流程文档审查与办公协同",
-        "https://example.com/smart-office-agent",
+        "smart-office.html",
         "办公",
         ["ADMIN", "Director", "USER"],
         None,
@@ -442,6 +451,10 @@ def init_db() -> None:
             "UPDATE products SET url = ? WHERE name = ?",
             ("", "问数智能体"),
         )
+        conn.execute(
+            "UPDATE products SET url = ? WHERE name = ?",
+            ("smart-office.html", SMART_OFFICE_PRODUCT_NAME),
+        )
         _backfill_product_content(conn)
 
 
@@ -571,6 +584,36 @@ class CustomerScriptResponse(BaseModel):
     success: bool
     data: CustomerScriptSuggestion | None = None
     message: str = ""
+
+
+class SmartOfficeReviewRequest(BaseModel):
+    product_id: int
+    scenario: Literal["expense", "resume", "tender", "contract"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class SmartOfficeReviewResult(BaseModel):
+    scenario: str
+    scenario_label: str
+    risk_level: str
+    score: int = Field(ge=0, le=100)
+    summary: str
+    findings: list[str]
+    suggestions: list[str]
+    next_step: str
+
+
+class SmartOfficeReviewResponse(BaseModel):
+    success: bool
+    data: SmartOfficeReviewResult | None = None
+    message: str = ""
+
+
+class SmartOfficeConfigOut(BaseModel):
+    api_key_configured: bool
+    model: str
+    base_url: str
+    hint: str
 
 
 class EnterpriseGptSourceOut(BaseModel):
@@ -1120,6 +1163,106 @@ def request_deepseek_customer_script(intent: str, customer_message: str) -> Cust
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
         raise DeepSeekResponseError("DeepSeek API 响应结构异常") from exc
     return _normalize_customer_script_suggestion(_json_object_from_text(content))
+
+
+def _normalize_smart_office_review(raw: dict[str, Any], scenario: str) -> SmartOfficeReviewResult:
+    scenario_label = str(raw.get("scenario_label") or SMART_OFFICE_SCENARIOS.get(scenario, scenario)).strip()
+    risk_level = str(raw.get("risk_level") or "中").strip()
+    if risk_level not in ("低", "中", "高"):
+        risk_level = "中"
+    return SmartOfficeReviewResult(
+        scenario=scenario,
+        scenario_label=scenario_label,
+        risk_level=risk_level,
+        score=_clamp_score(raw.get("score"), 55),
+        summary=str(raw.get("summary") or "审查完成，请结合业务规则复核。").strip(),
+        findings=_string_list(raw.get("findings"), ["未发现显著风险点，建议按常规流程处理"]),
+        suggestions=_string_list(raw.get("suggestions"), ["按标准清单完成复核并留存审批记录"]),
+        next_step=str(raw.get("next_step") or "提交相关负责人复核").strip(),
+    )
+
+
+def request_deepseek_smart_office_review(scenario: str, content: str) -> SmartOfficeReviewResult:
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not api_key:
+        raise DeepSeekConfigError("未配置 DeepSeek API Key")
+
+    scenario_label = SMART_OFFICE_SCENARIOS[scenario]
+    base_url = os.environ.get("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL).rstrip("/")
+    model = os.environ.get("DEEPSEEK_MODEL", DEEPSEEK_MODEL).strip() or DEEPSEEK_MODEL
+    timeout = float(os.environ.get("DEEPSEEK_TIMEOUT", "20"))
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是企业智能办公文档审查专家，覆盖报销单据、简历筛选、招标文件、合同审核。"
+                    "根据场景与待审查文本输出结构化审查结论。只输出 JSON 对象，不要 Markdown。"
+                    "字段必须包含：scenario_label、risk_level、score、summary、findings、suggestions、next_step。"
+                    "risk_level 只能是 低/中/高 之一；score 为 0-100 整数；findings 与 suggestions 为字符串数组。"
+                    "结论需可解释、可执行，避免空泛表述。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "scenario": scenario,
+                        "scenario_label": scenario_label,
+                        "content": content,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+        "temperature": 0.2,
+        "max_tokens": 900,
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")[:300]
+        raise DeepSeekResponseError(f"DeepSeek API 返回错误：{exc.code} {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise DeepSeekResponseError(f"DeepSeek API 请求失败：{exc.reason}") from exc
+    except TimeoutError as exc:
+        raise DeepSeekResponseError("DeepSeek API 请求超时") from exc
+
+    try:
+        data = json.loads(body)
+        llm_content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise DeepSeekResponseError("DeepSeek API 响应结构异常") from exc
+    return _normalize_smart_office_review(_json_object_from_text(llm_content), scenario)
+
+
+def smart_office_runtime_config() -> SmartOfficeConfigOut:
+    configured = bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
+    model = os.environ.get("DEEPSEEK_MODEL", DEEPSEEK_MODEL).strip() or DEEPSEEK_MODEL
+    base_url = os.environ.get("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL).rstrip("/")
+    hint = (
+        "已在服务端配置 DEEPSEEK_API_KEY，可直接发起大模型审查。"
+        if configured
+        else "未检测到 DEEPSEEK_API_KEY。请在项目根目录 .env 中配置后，执行 docker compose up 重启 API 服务。"
+    )
+    return SmartOfficeConfigOut(
+        api_key_configured=configured,
+        model=model,
+        base_url=base_url,
+        hint=hint,
+    )
 
 
 ENTERPRISE_GPT_SOURCES: list[tuple[str, str, str]] = [
@@ -1841,6 +1984,48 @@ def suggest_customer_script(
     if not isinstance(suggestion, CustomerScriptSuggestion):
         suggestion = _normalize_customer_script_suggestion(suggestion)
     return CustomerScriptResponse(success=True, data=suggestion)
+
+
+@app.get("/api/smart-office/config", response_model=SmartOfficeConfigOut)
+def get_smart_office_config(
+    user: dict[str, Any] = Depends(get_current_user),
+) -> SmartOfficeConfigOut:
+    _ = user
+    return smart_office_runtime_config()
+
+
+@app.post("/api/smart-office/review", response_model=SmartOfficeReviewResponse)
+def review_smart_office(
+    body: SmartOfficeReviewRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> SmartOfficeReviewResponse:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (body.product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != SMART_OFFICE_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+
+    try:
+        result = request_deepseek_smart_office_review(body.scenario, body.content.strip())
+    except DeepSeekConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except DeepSeekResponseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    return SmartOfficeReviewResponse(success=True, data=result)
 
 
 @app.get("/api/enterprise-gpt/sources", response_model=EnterpriseGptSourcesResponse)
