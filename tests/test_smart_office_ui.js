@@ -6,6 +6,9 @@ const js = fs.readFileSync("smart-office.js", "utf8");
 
 assert.match(html, /smart-office\.js/);
 assert.match(html, /DEEPSEEK_API_KEY/);
+assert.match(html, /doc-upload/);
+assert.match(html, /\.docx、\.pdf、\.md、\.txt/);
+assert.match(js, /\/api\/smart-office\/upload/);
 assert.match(js, /\/api\/smart-office\/review/);
 assert.match(js, /\/api\/smart-office\/config/);
 assert.match(js, /开始审查（DeepSeek）/);

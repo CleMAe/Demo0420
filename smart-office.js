@@ -56,10 +56,38 @@
     };
   }
 
+  function authOnlyHeaders() {
+    return {
+      Authorization: "Bearer " + token()
+    };
+  }
+
   function showError(msg) {
     var el = document.getElementById("load-err");
     el.textContent = msg;
     el.classList.remove("hidden");
+  }
+
+  function parseResponse(res, fallback) {
+    return res.text().then(function (text) {
+      var data = {};
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          data = { detail: text };
+        }
+      }
+      if (!res.ok) throw new Error((data && data.detail) || fallback);
+      return data;
+    });
+  }
+
+  function setUploadStatus(msg, tone) {
+    var el = document.getElementById("upload-status");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.className = "mt-2 text-xs " + (tone === "error" ? "text-red-600" : tone === "ok" ? "text-emerald-700" : "text-slate-500");
   }
 
   function renderTabs() {
@@ -101,10 +129,7 @@
   function loadConfig() {
     return fetch(apiBase() + "/api/smart-office/config", { headers: authHeaders() })
       .then(function (res) {
-        return res.json().then(function (data) {
-          if (!res.ok) throw new Error((data && data.detail) || "配置加载失败");
-          return data;
-        });
+        return parseResponse(res, "配置加载失败");
       })
       .then(function (cfg) {
         var status = document.getElementById("key-status");
@@ -127,10 +152,7 @@
     if (id) return Promise.resolve(id);
     return fetch(apiBase() + "/api/products", { headers: authHeaders() })
       .then(function (res) {
-        return res.json().then(function (data) {
-          if (!res.ok) throw new Error((data && data.detail) || "产品列表加载失败");
-          return data;
-        });
+        return parseResponse(res, "产品列表加载失败");
       })
       .then(function (products) {
         for (var i = 0; i < products.length; i++) {
@@ -168,12 +190,9 @@
         scenario: activeScenario.key,
         content: content
       })
-    })
+      })
       .then(function (res) {
-        return res.json().then(function (data) {
-          if (!res.ok) throw new Error((data && data.detail) || "审查失败");
-          return data;
-        });
+        return parseResponse(res, "审查失败");
       })
       .then(function (body) {
         var data = body.data || {};
@@ -205,6 +224,44 @@
       });
   }
 
+  function uploadDocument(file) {
+    if (!file) return;
+    if (!productId) {
+      setUploadStatus("产品信息未就绪，请稍后再选择文件。", "error");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setUploadStatus("文件过大，请上传 8MB 以内的文档。", "error");
+      return;
+    }
+    setUploadStatus("正在解析 " + file.name + "…");
+    fetch(
+      apiBase() + "/api/smart-office/upload?product_id=" +
+        encodeURIComponent(String(productId)) +
+        "&filename=" + encodeURIComponent(file.name),
+      {
+        method: "POST",
+        headers: authOnlyHeaders(),
+        body: file
+      }
+      )
+      .then(function (res) {
+        return parseResponse(res, "文档解析失败");
+      })
+      .then(function (body) {
+        var data = body.data || {};
+        document.getElementById("review-content").value = data.content || "";
+        setUploadStatus(
+          "已读取 " + (data.filename || file.name) + "（" + (data.file_type || "文档") + "，" +
+            String(data.chars || 0) + " 字）" + (data.truncated ? "，内容已截断到审查上限。" : "。"),
+          "ok"
+        );
+      })
+      .catch(function (ex) {
+        setUploadStatus(ex.message || "文档解析失败，请换一个文件重试。", "error");
+      });
+  }
+
   function init() {
     if (!token()) {
       window.location.href = "login.html";
@@ -218,6 +275,10 @@
     document.getElementById("review-content").value = activeScenario.sample;
     renderTabs();
     document.getElementById("btn-review").addEventListener("click", runReview);
+    document.getElementById("doc-upload").addEventListener("change", function (event) {
+      uploadDocument(event.target.files && event.target.files[0]);
+      event.target.value = "";
+    });
 
     Promise.all([loadConfig(), resolveProductId()])
       .then(function (results) {
