@@ -1307,27 +1307,271 @@
     };
   }
 
-  function demoAdminRouter(root) {
-    root.innerHTML = shell("密钥与路由（模拟）", (
-      '<table class="w-full text-left text-xs">' +
-      "<thead><tr class=\"border-b border-slate-200 text-slate-500\">" +
-      "<th class=\"py-2\">应用</th><th class=\"py-2\">路由策略</th><th class=\"py-2\">状态</th></tr></thead><tbody>" +
-      '<tr class="border-b border-slate-100"><td class="py-2 font-medium">客服机器人</td><td class="py-2">gpt-4.1-mini · 华东</td>' +
-      '<td class="py-2"><button type="button" data-toggle="1" class="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">启用</button></td></tr>' +
-      '<tr class="border-b border-slate-100"><td class="py-2 font-medium">内部 RAG</td><td class="py-2">私有模型 · VPC</td>' +
-      '<td class="py-2"><button type="button" data-toggle="2" class="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">启用</button></td></tr>' +
-      "</tbody></table>" +
-      '<p class="mt-3 text-xs text-slate-500">API Key：<span class="font-mono">sk-••••••••8f2a</span>（脱敏模拟）</p>'
+  function demoAdminRouter(root, product) {
+    root.innerHTML = shell("密钥与模型路由治理", (
+      '<div class="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">' +
+      '<section class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<div class="flex flex-wrap items-center justify-between gap-2">' +
+      '<h3 class="text-sm font-semibold text-slate-900">路由演练</h3>' +
+      '<span class="rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-600">仅管理员</span>' +
+      "</div>" +
+      '<div class="mt-4 grid gap-3 sm:grid-cols-2">' +
+      '<label class="text-xs font-medium text-slate-600">应用模块' +
+      '<select data-field="application" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      '<option value="customer-service">客服话术优化</option>' +
+      '<option value="internal-rag">企业 GPT 助手</option>' +
+      '<option value="office-review">智能办公智能体</option>' +
+      '<option value="training-coach">员工自助：培训陪练</option>' +
+      "</select></label>" +
+      '<label class="text-xs font-medium text-slate-600">风险等级' +
+      '<select data-field="risk" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      '<option value="medium">中风险</option><option value="low">低风险</option><option value="high">高风险</option>' +
+      "</select></label>" +
+      '<label class="text-xs font-medium text-slate-600">输入 Token' +
+      '<input data-field="tokens" type="number" min="100" max="50000" value="2400" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />' +
+      "</label>" +
+      '<label class="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600">' +
+      '<input data-field="sensitive" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-orange-500 focus:ring-orange-500" />' +
+      "包含敏感数据标记" +
+      "</label></div>" +
+      '<button type="button" data-action="simulate" class="mt-4 inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">运行路由演练</button>' +
+      '<div data-slot="simulation" class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">等待管理员发起演练。</div>' +
+      "</section>" +
+      '<section class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<div class="flex flex-wrap items-center justify-between gap-2">' +
+      '<h3 class="text-sm font-semibold text-slate-900">密钥轮换</h3>' +
+      '<button type="button" data-action="refresh" class="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:border-orange-300 hover:text-orange-700">刷新</button>' +
+      "</div>" +
+      '<label class="mt-4 block text-xs font-medium text-slate-600">密钥标识' +
+      '<select data-field="key" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"></select></label>' +
+      '<label class="mt-3 block text-xs font-medium text-slate-600">轮换原因' +
+      '<input data-field="reason" value="定期轮换演练" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />' +
+      "</label>" +
+      '<button type="button" data-action="rotate" class="mt-4 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-orange-300 hover:text-orange-700 disabled:cursor-not-allowed disabled:text-slate-400">模拟轮换</button>' +
+      '<div data-slot="rotation" class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">未执行轮换演练。</div>' +
+      "</section></div>" +
+      '<div class="mt-4 grid gap-4 lg:grid-cols-[1fr_0.9fr]">' +
+      '<section class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<h3 class="text-sm font-semibold text-slate-900">路由策略</h3>' +
+      '<div data-slot="routes" class="mt-3 overflow-x-auto text-xs text-slate-600">加载中…</div>' +
+      "</section>" +
+      '<section class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<h3 class="text-sm font-semibold text-slate-900">密钥台账</h3>' +
+      '<div data-slot="keys" class="mt-3 space-y-2 text-xs text-slate-600">加载中…</div>' +
+      "</section></div>" +
+      '<div class="mt-4 grid gap-4 lg:grid-cols-2">' +
+      '<section class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<h3 class="text-sm font-semibold text-slate-900">治理告警</h3>' +
+      '<div data-slot="warnings" class="mt-3 space-y-2 text-xs text-slate-600">加载中…</div>' +
+      "</section>" +
+      '<section class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<h3 class="text-sm font-semibold text-slate-900">审计日志</h3>' +
+      '<div data-slot="audit" class="mt-3 space-y-2 text-xs text-slate-600">加载中…</div>' +
+      "</section></div>" +
+      '<p data-slot="disclaimer" class="mt-3 text-xs leading-relaxed text-slate-500"></p>'
     ));
-    root.querySelectorAll("[data-toggle]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var on = btn.textContent === "启用";
-        btn.textContent = on ? "熔断" : "启用";
-        btn.className = on
-          ? "rounded-full bg-red-100 px-2 py-0.5 text-red-800"
-          : "rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800";
+
+    var state = { keys: [] };
+
+    function jsonResponse(res) {
+      return res.text().then(function (text) {
+        var body = {};
+        if (text) {
+          try {
+            body = JSON.parse(text);
+          } catch (e) {
+            body = { detail: text };
+          }
+        }
+        if (!res.ok) throw new Error((body && (body.detail || body.message)) || "请求失败");
+        return body;
       });
+    }
+
+    function requireAdminContext(out) {
+      var token = localStorage.getItem("portal_token");
+      if (!token || !(product && product.id)) {
+        out.innerHTML = '<p class="text-sm text-red-700">未登录或缺少产品信息，无法访问管理员模块。</p>';
+        return null;
+      }
+      return token;
+    }
+
+    function statusClass(statusText) {
+      if (statusText === "健康" || statusText === "启用") return "bg-emerald-50 text-emerald-700";
+      if (statusText === "观察") return "bg-amber-50 text-amber-800";
+      return "bg-slate-100 text-slate-600";
+    }
+
+    function renderRoutes(routes) {
+      var rows = (routes || []).map(function (route) {
+        return (
+          '<tr class="border-b border-slate-100 last:border-0">' +
+          '<td class="py-2 pr-3 font-medium text-slate-800">' + escapeHtml(route.application_label) + '</td>' +
+          '<td class="py-2 pr-3">' + escapeHtml(route.primary_model) + '<br><span class="text-slate-400">兜底：' + escapeHtml(route.fallback_model) + '</span></td>' +
+          '<td class="py-2 pr-3">' + escapeHtml(route.policy) + '</td>' +
+          '<td class="py-2"><span class="rounded-lg px-2 py-0.5 ' + statusClass(route.status) + '">' + escapeHtml(route.status) + '</span></td>' +
+          "</tr>"
+        );
+      }).join("");
+      root.querySelector("[data-slot=\"routes\"]").innerHTML =
+        '<table class="min-w-full text-left"><thead><tr class="border-b border-slate-200 text-slate-400">' +
+        '<th class="py-2 pr-3">应用</th><th class="py-2 pr-3">模型</th><th class="py-2 pr-3">策略</th><th class="py-2">状态</th>' +
+        "</tr></thead><tbody>" + rows + "</tbody></table>";
+    }
+
+    function renderKeys(keys) {
+      state.keys = keys || [];
+      var select = root.querySelector("[data-field=\"key\"]");
+      select.innerHTML = state.keys.map(function (key) {
+        return '<option value="' + escapeHtml(key.key_id) + '">' + escapeHtml(key.key_id) + '</option>';
+      }).join("");
+      root.querySelector("[data-slot=\"keys\"]").innerHTML = state.keys.map(function (key) {
+        return (
+          '<div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">' +
+          '<div class="flex flex-wrap items-center justify-between gap-2">' +
+          '<span class="font-mono text-slate-800">' + escapeHtml(key.masked_key) + '</span>' +
+          '<span class="rounded-lg px-2 py-0.5 ' + statusClass(key.status) + '">' + escapeHtml(key.status) + '</span>' +
+          "</div>" +
+          '<p class="mt-1 text-slate-500">' + escapeHtml(key.provider) + ' · 负责人：' + escapeHtml(key.owner) + '</p>' +
+          '<p class="mt-1 text-slate-500">配额 ' + escapeHtml(String(key.used_pct)) + '% · 距轮换 ' + escapeHtml(String(key.rotation_days)) + ' 天</p>' +
+          "</div>"
+        );
+      }).join("");
+    }
+
+    function renderWarnings(warnings) {
+      var list = warnings || [];
+      root.querySelector("[data-slot=\"warnings\"]").innerHTML = list.length
+        ? list.map(function (item) {
+          return '<p class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">' + escapeHtml(item) + '</p>';
+        }).join("")
+        : '<p class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-800">当前没有演示告警。</p>';
+    }
+
+    function renderAudit(events) {
+      root.querySelector("[data-slot=\"audit\"]").innerHTML = (events || []).map(function (event) {
+        return (
+          '<div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">' +
+          '<p class="font-medium text-slate-800">' + escapeHtml(event.action) + ' · ' + escapeHtml(event.target) + '</p>' +
+          '<p class="mt-1 text-slate-500">' + escapeHtml(event.time) + ' · ' + escapeHtml(event.actor) + ' · ' + escapeHtml(event.result) + '</p>' +
+          "</div>"
+        );
+      }).join("");
+    }
+
+    function renderSimulation(data) {
+      var guardrails = (data.guardrails || []).map(function (item) {
+        return '<li>' + escapeHtml(item) + '</li>';
+      }).join("");
+      root.querySelector("[data-slot=\"simulation\"]").innerHTML =
+        '<div class="flex flex-wrap items-start justify-between gap-3">' +
+        '<div><p class="font-medium text-slate-900">' + escapeHtml(data.application_label) + '</p>' +
+        '<p class="mt-1 text-slate-600">' + escapeHtml(data.decision) + '</p></div>' +
+        '<span class="rounded-lg bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700">' + escapeHtml(data.throttle) + '</span>' +
+        "</div>" +
+        '<dl class="mt-3 grid gap-2 text-xs sm:grid-cols-2">' +
+        '<div><dt class="text-slate-400">选中模型</dt><dd class="font-medium text-slate-800">' + escapeHtml(data.selected_model) + '</dd></div>' +
+        '<div><dt class="text-slate-400">密钥标识</dt><dd class="font-mono text-slate-800">' + escapeHtml(data.masked_key) + '</dd></div>' +
+        '<div><dt class="text-slate-400">估算成本</dt><dd class="font-medium text-slate-800">' + escapeHtml(data.estimated_cost) + '</dd></div>' +
+        '<div><dt class="text-slate-400">估算时延</dt><dd class="font-medium text-slate-800">' + escapeHtml(String(data.estimated_latency_ms)) + ' ms</dd></div>' +
+        "</dl>" +
+        '<ul class="mt-3 list-disc space-y-1 pl-5 text-xs text-slate-600">' + guardrails + '</ul>' +
+        '<p class="mt-3 text-xs text-slate-400">' + escapeHtml(data.disclaimer || "") + '</p>';
+    }
+
+    function loadStatus() {
+      var routesSlot = root.querySelector("[data-slot=\"routes\"]");
+      var token = requireAdminContext(routesSlot);
+      if (!token) return Promise.resolve();
+      return fetch(apiBase() + "/api/admin-router/status?product_id=" + encodeURIComponent(product.id), {
+        headers: authHeaders()
+      })
+        .then(jsonResponse)
+        .then(function (body) {
+          var data = body.data || {};
+          renderRoutes(data.routes || []);
+          renderKeys(data.keys || []);
+          renderWarnings(data.warnings || []);
+          renderAudit(data.audit_events || []);
+          root.querySelector("[data-slot=\"disclaimer\"]").textContent = data.disclaimer || "";
+        })
+        .catch(function (ex) {
+          var html = '<p class="text-sm text-red-700">' + escapeHtml(ex.message || "加载管理员模块失败") + '</p>';
+          root.querySelector("[data-slot=\"routes\"]").innerHTML = html;
+          root.querySelector("[data-slot=\"keys\"]").innerHTML = html;
+          root.querySelector("[data-slot=\"warnings\"]").innerHTML = html;
+          root.querySelector("[data-slot=\"audit\"]").innerHTML = html;
+        });
+    }
+
+    bind(root, "[data-action=\"simulate\"]", "click", function () {
+      var out = root.querySelector("[data-slot=\"simulation\"]");
+      var token = requireAdminContext(out);
+      var btn = root.querySelector("[data-action=\"simulate\"]");
+      if (!token) return;
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 演练中";
+      out.innerHTML = '<p class="flex items-center gap-2 text-xs text-slate-500">' + spinHtml() + " 正在执行路由策略…</p>";
+      fetch(apiBase() + "/api/admin-router/simulate", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          product_id: product.id,
+          application: root.querySelector("[data-field=\"application\"]").value,
+          risk_level: root.querySelector("[data-field=\"risk\"]").value,
+          input_tokens: Number(root.querySelector("[data-field=\"tokens\"]").value || 2400),
+          contains_sensitive_data: root.querySelector("[data-field=\"sensitive\"]").checked
+        })
+      })
+        .then(jsonResponse)
+        .then(function (body) { renderSimulation(body.data || {}); })
+        .catch(function (ex) {
+          out.innerHTML = '<p class="text-sm text-red-700">' + escapeHtml(ex.message || "路由演练失败") + '</p>';
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "运行路由演练";
+        });
     });
+
+    bind(root, "[data-action=\"rotate\"]", "click", function () {
+      var out = root.querySelector("[data-slot=\"rotation\"]");
+      var token = requireAdminContext(out);
+      var btn = root.querySelector("[data-action=\"rotate\"]");
+      if (!token) return;
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 轮换中";
+      fetch(apiBase() + "/api/admin-router/rotate", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          product_id: product.id,
+          key_id: root.querySelector("[data-field=\"key\"]").value,
+          reason: root.querySelector("[data-field=\"reason\"]").value || "定期轮换演练"
+        })
+      })
+        .then(jsonResponse)
+        .then(function (body) {
+          var data = body.data || {};
+          out.innerHTML =
+            '<p class="font-medium text-slate-900">' + escapeHtml(data.status || "轮换演练已记录") + '</p>' +
+            '<p class="mt-2 text-xs text-slate-600">轮换编号：<span class="font-mono">' + escapeHtml(data.rotation_id || "") + '</span></p>' +
+            '<p class="mt-1 text-xs text-slate-600">密钥标识：<span class="font-mono">' + escapeHtml(data.masked_key || "") + '</span></p>' +
+            '<p class="mt-1 text-xs text-slate-600">下次轮换：' + escapeHtml(data.next_rotation_at || "") + '</p>' +
+            '<p class="mt-3 text-xs text-slate-400">' + escapeHtml(data.disclaimer || "") + '</p>';
+        })
+        .catch(function (ex) {
+          out.innerHTML = '<p class="text-sm text-red-700">' + escapeHtml(ex.message || "轮换演练失败") + '</p>';
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "模拟轮换";
+        });
+    });
+
+    bind(root, "[data-action=\"refresh\"]", "click", loadStatus);
+    loadStatus();
   }
 
   function demoDirectorSandbox(root) {
@@ -2024,8 +2268,8 @@
     });
   }
 
-  function fallbackGateway(root) {
-    demoAdminRouter(root);
+  function fallbackGateway(root, product) {
+    demoAdminRouter(root, product);
   }
 
   function fallbackDataViz(root) {
