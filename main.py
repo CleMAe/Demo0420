@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import io
 import json
 import os
 import re
 import sqlite3
 import urllib.error
 import urllib.request
+import zipfile
+import zlib
 from functools import lru_cache
+import xml.etree.ElementTree as ET
 
 from dotenv import load_dotenv
 
@@ -19,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -48,6 +52,8 @@ SMART_OFFICE_SCENARIOS: dict[str, str] = {
     "tender": "招标文件",
     "contract": "合同审核",
 }
+SMART_OFFICE_REVIEW_MAX_CHARS = 12000
+SMART_OFFICE_UPLOAD_MAX_BYTES = 8 * 1024 * 1024
 PROJECT_ROOT = Path(__file__).resolve().parent
 EMPLOYEE_HANDBOOK_PATH = PROJECT_ROOT / "docs" / "员工手册.md"
 COMPLIANCE_LIBRARY_PATH = PROJECT_ROOT / "docs" / "compliance.md"
@@ -589,7 +595,7 @@ class CustomerScriptResponse(BaseModel):
 class SmartOfficeReviewRequest(BaseModel):
     product_id: int
     scenario: Literal["expense", "resume", "tender", "contract"]
-    content: str = Field(min_length=1, max_length=4000)
+    content: str = Field(min_length=1, max_length=SMART_OFFICE_REVIEW_MAX_CHARS)
 
 
 class SmartOfficeReviewResult(BaseModel):
@@ -614,6 +620,20 @@ class SmartOfficeConfigOut(BaseModel):
     model: str
     base_url: str
     hint: str
+
+
+class SmartOfficeUploadData(BaseModel):
+    filename: str
+    file_type: str
+    content: str
+    chars: int
+    truncated: bool
+
+
+class SmartOfficeUploadResponse(BaseModel):
+    success: bool
+    data: SmartOfficeUploadData | None = None
+    message: str = ""
 
 
 class EnterpriseGptSourceOut(BaseModel):
@@ -1263,6 +1283,375 @@ def smart_office_runtime_config() -> SmartOfficeConfigOut:
         base_url=base_url,
         hint=hint,
     )
+
+
+def _require_smart_office_product(
+    product_id: int,
+    user: dict[str, Any],
+) -> sqlite3.Row:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (product_id,),
+        ).fetchone()
+    if (
+        row is None
+        or row["name"] != SMART_OFFICE_PRODUCT_NAME
+        or not product_visible_for_user(row, user)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+    return row
+
+
+def _decode_text_bytes(raw: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "gb18030"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _clean_uploaded_text(text: str) -> str:
+    text = text.replace("\x00", "")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _truncate_smart_office_content(text: str) -> tuple[str, bool]:
+    cleaned = _clean_uploaded_text(text)
+    if len(cleaned) <= SMART_OFFICE_REVIEW_MAX_CHARS:
+        return cleaned, False
+    return cleaned[:SMART_OFFICE_REVIEW_MAX_CHARS].rstrip(), True
+
+
+def _extract_docx_text(raw: bytes) -> str:
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            xml_body = archive.read("word/document.xml")
+    except (KeyError, zipfile.BadZipFile) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="无法读取 docx 文档内容，请确认文件未损坏",
+        ) from exc
+
+    try:
+        root = ET.fromstring(xml_body)
+    except ET.ParseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="docx 文档结构异常，无法解析",
+        ) from exc
+
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    paragraphs: list[str] = []
+    for paragraph in root.findall(".//w:p", ns):
+        text = "".join(node.text or "" for node in paragraph.findall(".//w:t", ns))
+        if text.strip():
+            paragraphs.append(text.strip())
+    return "\n".join(paragraphs)
+
+
+def _extract_legacy_doc_text(raw: bytes) -> str:
+    candidates: list[str] = []
+    for encoding in ("utf-16le", "gb18030", "latin1"):
+        decoded = raw.decode(encoding, errors="ignore")
+        spans = re.findall(r"[\u4e00-\u9fffA-Za-z0-9，。！？；：、（）()《》“”‘’%/._\-\s]{4,}", decoded)
+        cleaned = _clean_uploaded_text("\n".join(span.strip() for span in spans if span.strip()))
+        if cleaned:
+            candidates.append(cleaned)
+    text = max(candidates, key=len, default="")
+    if len(text) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="未能从旧版 .doc 文件中提取有效文本，请另存为 .docx 后重试",
+        )
+    return text
+
+
+def _decode_pdf_literal(value: str) -> str:
+    return _decode_pdf_literal_bytes(value).decode("latin1", errors="ignore")
+
+
+def _decode_pdf_literal_bytes(value: str) -> bytes:
+    out = bytearray()
+    i = 0
+    while i < len(value):
+        char = value[i]
+        if char != "\\":
+            out.append(ord(char) & 0xFF)
+            i += 1
+            continue
+        i += 1
+        if i >= len(value):
+            break
+        escaped = value[i]
+        mapped = {
+            "n": "\n",
+            "r": "\n",
+            "t": "\t",
+            "b": "",
+            "f": "",
+            "(": "(",
+            ")": ")",
+            "\\": "\\",
+        }
+        if escaped in mapped:
+            out.extend(mapped[escaped].encode("latin1", errors="ignore"))
+            i += 1
+        elif escaped in "01234567":
+            octal = escaped
+            i += 1
+            while i < len(value) and len(octal) < 3 and value[i] in "01234567":
+                octal += value[i]
+                i += 1
+            try:
+                out.append(int(octal, 8) & 0xFF)
+            except ValueError:
+                out.extend(octal.encode("latin1", errors="ignore"))
+        else:
+            out.append(ord(escaped) & 0xFF)
+            i += 1
+    return bytes(out)
+
+
+def _decode_pdf_hex(value: str) -> str:
+    data = _pdf_hex_to_bytes(value)
+    if not data:
+        return ""
+    if data.startswith(b"\xfe\xff"):
+        return data[2:].decode("utf-16-be", errors="ignore")
+    return data.decode("utf-8", errors="ignore") or data.decode("latin1", errors="ignore")
+
+
+def _pdf_hex_to_bytes(value: str) -> bytes:
+    cleaned = re.sub(r"\s+", "", value)
+    if len(cleaned) % 2:
+        cleaned += "0"
+    try:
+        return bytes.fromhex(cleaned)
+    except ValueError:
+        return b""
+
+
+def _decode_pdf_unicode_hex(value: str) -> str:
+    data = _pdf_hex_to_bytes(value)
+    if not data:
+        return ""
+    if data.startswith(b"\xfe\xff"):
+        data = data[2:]
+    if len(data) >= 2:
+        decoded = data.decode("utf-16-be", errors="ignore")
+        if decoded:
+            return decoded
+    return data.decode("utf-8", errors="ignore") or data.decode("latin1", errors="ignore")
+
+
+def _pdf_streams(raw: bytes) -> list[tuple[bytes, bytes]]:
+    streams: list[tuple[bytes, bytes]] = []
+    for match in re.finditer(rb"stream\r?\n(.*?)\r?\nendstream", raw, flags=re.DOTALL):
+        stream = match.group(1).strip(b"\r\n")
+        prefix = raw[max(0, match.start() - 500):match.start()]
+        if b"FlateDecode" in prefix:
+            try:
+                stream = zlib.decompress(stream)
+            except zlib.error:
+                continue
+        streams.append((prefix, stream))
+    return streams
+
+
+def _parse_pdf_tounicode_maps(raw: bytes) -> dict[bytes, str]:
+    cmap: dict[bytes, str] = {}
+    for _, stream in _pdf_streams(raw):
+        if b"beginbfchar" not in stream and b"beginbfrange" not in stream:
+            continue
+        text = stream.decode("latin1", errors="ignore")
+        for block in re.findall(r"beginbfchar(.*?)endbfchar", text, flags=re.DOTALL):
+            for src, dst in re.findall(r"<([0-9A-Fa-f\s]+)>\s*<([0-9A-Fa-f\s]+)>", block):
+                src_bytes = _pdf_hex_to_bytes(src)
+                dst_text = _decode_pdf_unicode_hex(dst)
+                if src_bytes and dst_text:
+                    cmap[src_bytes] = dst_text
+        for block in re.findall(r"beginbfrange(.*?)endbfrange", text, flags=re.DOTALL):
+            for start, end, dst in re.findall(
+                r"<([0-9A-Fa-f\s]+)>\s*<([0-9A-Fa-f\s]+)>\s*<([0-9A-Fa-f\s]+)>",
+                block,
+            ):
+                start_bytes = _pdf_hex_to_bytes(start)
+                end_bytes = _pdf_hex_to_bytes(end)
+                dst_bytes = _pdf_hex_to_bytes(dst)
+                if not start_bytes or not end_bytes or not dst_bytes:
+                    continue
+                start_int = int.from_bytes(start_bytes, "big")
+                end_int = int.from_bytes(end_bytes, "big")
+                dst_int = int.from_bytes(dst_bytes, "big")
+                width = len(start_bytes)
+                for offset, code in enumerate(range(start_int, end_int + 1)):
+                    src_bytes = code.to_bytes(width, "big")
+                    unicode_bytes = (dst_int + offset).to_bytes(len(dst_bytes), "big")
+                    cmap[src_bytes] = _decode_pdf_unicode_hex(unicode_bytes.hex())
+            for start, end, values in re.findall(
+                r"<([0-9A-Fa-f\s]+)>\s*<([0-9A-Fa-f\s]+)>\s*\[(.*?)\]",
+                block,
+                flags=re.DOTALL,
+            ):
+                start_bytes = _pdf_hex_to_bytes(start)
+                if not start_bytes:
+                    continue
+                start_int = int.from_bytes(start_bytes, "big")
+                width = len(start_bytes)
+                for offset, dst in enumerate(re.findall(r"<([0-9A-Fa-f\s]+)>", values)):
+                    cmap[(start_int + offset).to_bytes(width, "big")] = _decode_pdf_unicode_hex(dst)
+    return cmap
+
+
+def _apply_pdf_cmap(data: bytes, cmap: dict[bytes, str]) -> str:
+    if not cmap:
+        return ""
+    max_width = max(len(key) for key in cmap)
+    out: list[str] = []
+    i = 0
+    while i < len(data):
+        matched = False
+        for width in range(max_width, 0, -1):
+            token = data[i:i + width]
+            if token in cmap:
+                out.append(cmap[token])
+                i += width
+                matched = True
+                break
+        if not matched:
+            out.append(chr(data[i]))
+            i += 1
+    return "".join(out)
+
+
+def _pdf_text_score(text: str) -> int:
+    lowered = text.lower()
+    keywords = (
+        "gmail", "email", "linkedin", "python", "sql", "java", "github",
+        "carnegie", "university", "experience", "education", "project",
+        "agent", "resume", "machine learning", "javascript", "typescript",
+    )
+    score = sum(3 for keyword in keywords if keyword in lowered)
+    score += len(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)) * 8
+    score += len(re.findall(r"https?://|linkedin\.com|github\.com", lowered)) * 4
+    score -= len(re.findall(r"[\x00-\x08\x0b-\x1f]", text)) * 2
+    return score
+
+
+def _repair_pdf_shift_encoding(text: str) -> str:
+    best_text = text
+    best_score = _pdf_text_score(text)
+    for shift in range(1, 41):
+        chars: list[str] = []
+        for char in text:
+            code = ord(char)
+            shifted = code + shift
+            if code != 32 and 1 <= code <= 126 and 32 <= shifted <= 126:
+                chars.append(chr(shifted))
+            else:
+                chars.append(char)
+        candidate = "".join(chars)
+        score = _pdf_text_score(candidate)
+        if score > best_score:
+            best_text = candidate
+            best_score = score
+    return best_text
+
+
+def _extract_text_from_pdf_stream(stream: bytes, cmap: dict[bytes, str] | None = None) -> str:
+    decoded = stream.decode("latin1", errors="ignore")
+    pieces: list[str] = []
+    for match in re.finditer(r"\((?:\\.|[^\\()])*\)", decoded):
+        literal = match.group(0)[1:-1]
+        literal_bytes = _decode_pdf_literal_bytes(literal)
+        if cmap:
+            pieces.append(_apply_pdf_cmap(literal_bytes, cmap))
+        else:
+            pieces.append(literal_bytes.decode("latin1", errors="ignore"))
+    for match in re.finditer(r"<([0-9A-Fa-f\s]{4,})>", decoded):
+        hex_bytes = _pdf_hex_to_bytes(match.group(1))
+        text = _apply_pdf_cmap(hex_bytes, cmap) if cmap else _decode_pdf_hex(match.group(1))
+        if text:
+            pieces.append(text)
+    return " ".join(piece.strip() for piece in pieces if piece.strip())
+
+
+def _extract_pdf_text(raw: bytes) -> str:
+    pieces: list[str] = []
+    cmap = _parse_pdf_tounicode_maps(raw)
+    for _, stream in _pdf_streams(raw):
+        if b"beginbfchar" in stream or b"beginbfrange" in stream:
+            continue
+        text = _extract_text_from_pdf_stream(stream, cmap)
+        if text:
+            pieces.append(text)
+
+    if not pieces:
+        text = _extract_text_from_pdf_stream(raw, cmap)
+        if text:
+            pieces.append(text)
+
+    extracted = _clean_uploaded_text(_repair_pdf_shift_encoding("\n".join(pieces)))
+    if not extracted:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="未能从 PDF 中提取文本，请确认 PDF 不是纯扫描图片",
+        )
+    return extracted
+
+
+def _extract_smart_office_upload(filename: str, raw: bytes) -> tuple[str, str, bool]:
+    safe_name = Path(filename or "").name
+    suffix = Path(safe_name).suffix.lower()
+    if not safe_name or not suffix:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="缺少文件名或文件类型",
+        )
+    if len(raw) > SMART_OFFICE_UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="文件过大，请上传 8MB 以内的文档",
+        )
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="上传文件为空",
+        )
+
+    if suffix in (".md", ".markdown"):
+        text = _decode_text_bytes(raw)
+        file_type = "Markdown"
+    elif suffix == ".txt":
+        text = _decode_text_bytes(raw)
+        file_type = "Text"
+    elif suffix == ".docx":
+        text = _extract_docx_text(raw)
+        file_type = "Word"
+    elif suffix == ".doc":
+        text = _extract_legacy_doc_text(raw)
+        file_type = "Word"
+    elif suffix == ".pdf":
+        text = _extract_pdf_text(raw)
+        file_type = "PDF"
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="仅支持 md、txt、doc、docx、pdf 文件",
+        )
+
+    content, truncated = _truncate_smart_office_content(text)
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="未能从文件中提取有效文本",
+        )
+    return content, file_type, truncated
 
 
 ENTERPRISE_GPT_SOURCES: list[tuple[str, str, str]] = [
@@ -1994,23 +2383,36 @@ def get_smart_office_config(
     return smart_office_runtime_config()
 
 
+@app.post("/api/smart-office/upload", response_model=SmartOfficeUploadResponse)
+async def upload_smart_office_document(
+    product_id: int,
+    filename: str,
+    request: Request,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> SmartOfficeUploadResponse:
+    _require_smart_office_product(product_id, user)
+    content, file_type, truncated = _extract_smart_office_upload(
+        filename,
+        await request.body(),
+    )
+    return SmartOfficeUploadResponse(
+        success=True,
+        data=SmartOfficeUploadData(
+            filename=Path(filename).name,
+            file_type=file_type,
+            content=content,
+            chars=len(content),
+            truncated=truncated,
+        ),
+    )
+
+
 @app.post("/api/smart-office/review", response_model=SmartOfficeReviewResponse)
 def review_smart_office(
     body: SmartOfficeReviewRequest,
     user: dict[str, Any] = Depends(get_current_user),
 ) -> SmartOfficeReviewResponse:
-    with db() as conn:
-        row = conn.execute(
-            """SELECT id, name, allowed_roles, industry_scope
-               FROM products WHERE id = ?""",
-            (body.product_id,),
-        ).fetchone()
-    if (
-        row is None
-        or row["name"] != SMART_OFFICE_PRODUCT_NAME
-        or not product_visible_for_user(row, user)
-    ):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+    _require_smart_office_product(body.product_id, user)
 
     try:
         result = request_deepseek_smart_office_review(body.scenario, body.content.strip())

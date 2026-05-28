@@ -1,4 +1,7 @@
 import importlib
+import io
+import zipfile
+import zlib
 
 from fastapi.testclient import TestClient
 
@@ -36,6 +39,69 @@ def customer_script_product_id(client, headers):
         if product["name"] == "客服话术优化":
             return product["id"]
     raise AssertionError("客服话术优化 product not found")
+
+
+def docx_bytes(paragraphs):
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+        + "".join(
+            "<w:p><w:r><w:t>" + paragraph + "</w:t></w:r></w:p>"
+            for paragraph in paragraphs
+        )
+        + "</w:body></w:document>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("word/document.xml", document_xml)
+    return buffer.getvalue()
+
+
+def simple_pdf_bytes(text):
+    stream = ("BT /F1 12 Tf 72 720 Td (" + text + ") Tj ET").encode("latin1")
+    compressed = zlib.compress(stream)
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Length "
+        + str(len(compressed)).encode("ascii")
+        + b" /Filter /FlateDecode >>\nstream\n"
+        + compressed
+        + b"\nendstream\nendobj\n%%EOF"
+    )
+
+
+def tounicode_pdf_bytes():
+    cmap = (
+        "/CIDInit /ProcSet findresource begin\n"
+        "12 dict begin\n"
+        "begincmap\n"
+        "1 beginbfchar\n"
+        "<01> <4E2D6587>\n"
+        "endbfchar\n"
+        "1 beginbfrange\n"
+        "<02> <03> <7B80>\n"
+        "endbfrange\n"
+        "endcmap\n"
+        "CMapName currentdict /CMap defineresource pop\n"
+        "end end"
+    ).encode("latin1")
+    content = b"BT /F1 12 Tf 72 720 Td <010203> Tj ET"
+    cmap_stream = zlib.compress(cmap)
+    content_stream = zlib.compress(content)
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Length "
+        + str(len(cmap_stream)).encode("ascii")
+        + b" /Filter /FlateDecode >>\nstream\n"
+        + cmap_stream
+        + b"\nendstream\nendobj\n"
+        b"2 0 obj\n<< /Length "
+        + str(len(content_stream)).encode("ascii")
+        + b" /Filter /FlateDecode >>\nstream\n"
+        + content_stream
+        + b"\nendstream\nendobj\n%%EOF"
+    )
 
 
 def test_smart_office_config_reports_api_key_status(monkeypatch, tmp_path):
@@ -121,6 +187,138 @@ def test_smart_office_review_returns_llm_structured_result(monkeypatch, tmp_path
     assert data["risk_level"] == "中"
     assert data["findings"] == ["差旅餐费超过标准 12%"]
     assert captured["scenario"] == "expense"
+
+
+def test_smart_office_upload_reads_markdown(monkeypatch, tmp_path):
+    app_module = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        headers = auth_headers(client)
+        product_id = smart_office_product_id(client, headers)
+        response = client.post(
+            "/api/smart-office/upload",
+            params={"product_id": product_id, "filename": "review.md"},
+            headers=headers,
+            content="# 合同审核\n责任上限条款与模板不一致。",
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["file_type"] == "Markdown"
+    assert "责任上限条款" in body["data"]["content"]
+
+
+def test_smart_office_upload_reads_docx(monkeypatch, tmp_path):
+    app_module = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        headers = auth_headers(client)
+        product_id = smart_office_product_id(client, headers)
+        response = client.post(
+            "/api/smart-office/upload",
+            params={"product_id": product_id, "filename": "resume.docx"},
+            headers=headers,
+            content=docx_bytes(["候选人 5 年后端经验", "缺少目标行业背景"]),
+        )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["file_type"] == "Word"
+    assert "候选人 5 年后端经验" in data["content"]
+    assert "缺少目标行业背景" in data["content"]
+
+
+def test_smart_office_upload_reads_pdf(monkeypatch, tmp_path):
+    app_module = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        headers = auth_headers(client)
+        product_id = smart_office_product_id(client, headers)
+        response = client.post(
+            "/api/smart-office/upload",
+            params={"product_id": product_id, "filename": "tender.pdf"},
+            headers=headers,
+            content=simple_pdf_bytes("Tender risk requires review"),
+        )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["file_type"] == "PDF"
+    assert "Tender risk requires review" in data["content"]
+
+
+def test_smart_office_upload_pdf_ignores_non_octal_escapes(monkeypatch, tmp_path):
+    app_module = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        headers = auth_headers(client)
+        product_id = smart_office_product_id(client, headers)
+        response = client.post(
+            "/api/smart-office/upload",
+            params={"product_id": product_id, "filename": "resume.pdf"},
+            headers=headers,
+            content=simple_pdf_bytes("Resume risk \\³ requires review"),
+        )
+
+    assert response.status_code == 200
+    assert "Resume risk" in response.json()["data"]["content"]
+
+
+def test_smart_office_upload_pdf_repairs_shift_encoded_ascii(monkeypatch, tmp_path):
+    app_module = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        headers = auth_headers(client)
+        product_id = smart_office_product_id(client, headers)
+        response = client.post(
+            "/api/smart-office/upload",
+            params={"product_id": product_id, "filename": "resume.pdf"},
+            headers=headers,
+            content=simple_pdf_bytes("JPDLO\\021FRP 3\\\\WKRQ &DUQHJLH 0HOORQ 8QLYHUVLW\\\\"),
+        )
+
+    assert response.status_code == 200
+    content = response.json()["data"]["content"]
+    assert "gmail.com" in content
+    assert "Python" in content
+    assert "Carnegie Mellon University" in content
+
+
+def test_smart_office_upload_pdf_uses_tounicode_cmap(monkeypatch, tmp_path):
+    app_module = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        headers = auth_headers(client)
+        product_id = smart_office_product_id(client, headers)
+        response = client.post(
+            "/api/smart-office/upload",
+            params={"product_id": product_id, "filename": "resume.pdf"},
+            headers=headers,
+            content=tounicode_pdf_bytes(),
+        )
+
+    assert response.status_code == 200
+    assert "中文简" in response.json()["data"]["content"]
+
+
+def test_smart_office_upload_reads_legacy_doc_best_effort(monkeypatch, tmp_path):
+    app_module = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        headers = auth_headers(client)
+        product_id = smart_office_product_id(client, headers)
+        response = client.post(
+            "/api/smart-office/upload",
+            params={"product_id": product_id, "filename": "legacy.doc"},
+            headers=headers,
+            content="旧版 Word 合同审核内容，付款周期 90 天。".encode("utf-16le"),
+        )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["file_type"] == "Word"
+    assert "付款周期" in data["content"]
 
 
 def test_smart_office_review_rejects_other_product(monkeypatch, tmp_path):
