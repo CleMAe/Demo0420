@@ -2620,6 +2620,195 @@ app.add_middleware(
 )
 
 
+ASK_DATA_PRODUCT_NAME = "问数智能体"
+ASK_DATA_SQL_BLOCKED_KEYWORDS = (
+    "insert",
+    "update",
+    "delete",
+    "drop",
+    "alter",
+    "truncate",
+    "create",
+    "grant",
+    "revoke",
+    "merge",
+    "replace",
+    "into outfile",
+)
+ASK_DATA_DEFAULT_LIMIT = 50
+ASK_DATA_MAX_LIMIT = 200
+
+
+class AskDataGenerateRequest(BaseModel):
+    product_id: int
+    question: str = Field(min_length=1, max_length=500)
+
+
+class AskDataSemanticMapping(BaseModel):
+    metric: str
+    dimensions: list[str]
+    filters: list[str]
+    grain: str
+
+
+class AskDataGenerateData(BaseModel):
+    question: str
+    sql: str
+    explain: str
+    chart_hint: str
+    semantic_mapping: AskDataSemanticMapping
+    guardrails: list[str]
+    generated_at: str
+
+
+class AskDataGenerateResponse(BaseModel):
+    success: bool
+    data: AskDataGenerateData | None = None
+    message: str = ""
+
+
+class AskDataExecuteRequest(BaseModel):
+    product_id: int
+    sql: str = Field(min_length=1, max_length=3000)
+    limit: int = Field(default=ASK_DATA_DEFAULT_LIMIT, ge=1, le=ASK_DATA_MAX_LIMIT)
+
+
+class AskDataExecuteData(BaseModel):
+    sql: str
+    columns: list[str]
+    rows: list[dict[str, Any]]
+    row_count: int
+    result_note: str
+    executed_at: str
+
+
+class AskDataExecuteResponse(BaseModel):
+    success: bool
+    data: AskDataExecuteData | None = None
+    message: str = ""
+
+
+def _require_ask_data_product(
+    product_id: int,
+    user: dict[str, Any],
+) -> sqlite3.Row:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id, name, allowed_roles, industry_scope
+               FROM products WHERE id = ?""",
+            (product_id,),
+        ).fetchone()
+    if row is None or row["name"] != ASK_DATA_PRODUCT_NAME or not product_visible_for_user(row, user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
+    return row
+
+
+def _utc8_now() -> str:
+    return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _ask_data_semantic_parse(question: str) -> AskDataSemanticMapping:
+    q = question.lower()
+    metric = "SUM(order_amt) AS order_amt"
+    metric_label = "订单金额"
+    if any(word in q for word in ("订单数", "单量", "order count", "count")):
+        metric = "COUNT(1) AS order_cnt"
+        metric_label = "订单数"
+    elif any(word in q for word in ("客单价", "aov", "avg")):
+        metric = "ROUND(SUM(order_amt) / NULLIF(COUNT(1), 0), 2) AS aov"
+        metric_label = "客单价"
+
+    dims: list[str] = ["week"]
+    grain = "周"
+    if any(word in q for word in ("按天", "每日", "day", "日趋势")):
+        dims = ["dt"]
+        grain = "日"
+    elif any(word in q for word in ("按月", "月度", "month", "月趋势")):
+        dims = ["month"]
+        grain = "月"
+
+    filters: list[str] = []
+    if "华东" in question:
+        filters.append("region = '华东'")
+    elif "华南" in question:
+        filters.append("region = '华南'")
+    elif "华北" in question:
+        filters.append("region = '华北'")
+    elif "全国" in question:
+        filters.append("1 = 1")
+    else:
+        filters.append("region = '华东'")
+
+    if any(word in question for word in ("上月", "上个月")):
+        filters.append("dt >= date('now', 'start of month', '-1 month')")
+        filters.append("dt < date('now', 'start of month')")
+    elif any(word in question for word in ("本月", "这个月")):
+        filters.append("dt >= date('now', 'start of month')")
+        filters.append("dt < date('now', 'start of month', '+1 month')")
+    else:
+        filters.append("dt >= date('now', '-28 day')")
+        filters.append("dt <= date('now')")
+
+    return AskDataSemanticMapping(
+        metric=metric_label,
+        dimensions=dims,
+        filters=filters,
+        grain=grain,
+    )
+
+
+def _build_ask_data_sql(mapping: AskDataSemanticMapping) -> str:
+    dim = mapping.dimensions[0] if mapping.dimensions else "week"
+    dim_select = dim
+    where_sql = " AND ".join(mapping.filters) if mapping.filters else "1 = 1"
+    metric_expr = "SUM(order_amt) AS order_amt"
+    if mapping.metric == "订单数":
+        metric_expr = "COUNT(1) AS order_cnt"
+    elif mapping.metric == "客单价":
+        metric_expr = "ROUND(SUM(order_amt) / NULLIF(COUNT(1), 0), 2) AS aov"
+    return (
+        f"SELECT {dim_select}, {metric_expr}\n"
+        "FROM dw.f_orders\n"
+        f"WHERE {where_sql}\n"
+        f"GROUP BY {dim_select}\n"
+        f"ORDER BY {dim_select}\n"
+        f"LIMIT {ASK_DATA_DEFAULT_LIMIT};"
+    )
+
+
+def _ensure_safe_readonly_sql(sql: str) -> str:
+    cleaned = (sql or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="SQL 不能为空")
+    lowered = cleaned.lower()
+    if not lowered.startswith("select "):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="仅允许执行 SELECT 语句")
+    for keyword in ASK_DATA_SQL_BLOCKED_KEYWORDS:
+        if keyword in lowered:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"检测到高风险 SQL 关键字：{keyword}")
+    if "dw.f_orders" not in lowered:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="仅允许访问演示语义层表 dw.f_orders")
+    if ";" in cleaned[:-1]:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="仅允许单条 SQL 语句")
+    return cleaned
+
+
+def _ask_data_preview_rows(limit: int, metric: str) -> tuple[list[str], list[dict[str, Any]]]:
+    safe_limit = max(1, min(limit, ASK_DATA_MAX_LIMIT))
+    columns = ["week", metric]
+    rows: list[dict[str, Any]] = []
+    for i in range(safe_limit):
+        week = f"2026-W{(i % 12) + 1:02d}"
+        if metric == "order_cnt":
+            value = 120 + (i * 3) % 37
+        elif metric == "aov":
+            value = round(188.0 + (i * 1.7) % 26, 2)
+        else:
+            value = 52000 + (i * 2300) % 18000
+        rows.append({"week": week, metric: value})
+    return columns, rows
+
+
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
@@ -3019,6 +3208,67 @@ def suggest_clinical_pathway(
         body.symptoms,
     )
     return ClinicalPathwayResponse(success=True, data=suggestion)
+
+
+@app.post("/api/ask-data/generate", response_model=AskDataGenerateResponse)
+def generate_ask_data_sql(
+    body: AskDataGenerateRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> AskDataGenerateResponse:
+    _require_ask_data_product(body.product_id, user)
+    question = body.question.strip()
+    mapping = _ask_data_semantic_parse(question)
+    sql = _build_ask_data_sql(mapping)
+    _ = _ensure_safe_readonly_sql(sql)
+    explain = (
+        f"已将问题映射为「{mapping.metric}」指标，按{mapping.grain}粒度聚合；"
+        "先走语义层口径，再输出可审计 SQL。"
+    )
+    chart_hint = "趋势分析优先使用折线图；需要对比区域时改为分组柱状图。"
+    guardrails = [
+        "仅允许读取演示语义层表 dw.f_orders",
+        "仅允许单条 SELECT 语句，拦截写入和 DDL/DCL 关键字",
+        "结果用于演示，不可替代真实经营报表",
+    ]
+    return AskDataGenerateResponse(
+        success=True,
+        data=AskDataGenerateData(
+            question=question,
+            sql=sql,
+            explain=explain,
+            chart_hint=chart_hint,
+            semantic_mapping=mapping,
+            guardrails=guardrails,
+            generated_at=_utc8_now(),
+        ),
+    )
+
+
+@app.post("/api/ask-data/execute", response_model=AskDataExecuteResponse)
+def execute_ask_data_sql(
+    body: AskDataExecuteRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> AskDataExecuteResponse:
+    _require_ask_data_product(body.product_id, user)
+    safe_sql = _ensure_safe_readonly_sql(body.sql)
+    lowered = safe_sql.lower()
+    metric = "order_amt"
+    if " as order_cnt" in lowered or "count(" in lowered:
+        metric = "order_cnt"
+    elif " as aov" in lowered:
+        metric = "aov"
+    columns, rows = _ask_data_preview_rows(body.limit, metric)
+    return AskDataExecuteResponse(
+        success=True,
+        data=AskDataExecuteData(
+            sql=safe_sql,
+            columns=columns,
+            rows=rows,
+            row_count=len(rows),
+            result_note="当前为演示数据执行通道，结果来自受控样本集。",
+            executed_at=_utc8_now(),
+        ),
+    )
 
 
 @app.get("/health")

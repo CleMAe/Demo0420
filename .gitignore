@@ -17,3 +17,5 @@ env/
 *.sqlite3
 data/
 portal-data/
+
+.idea/
