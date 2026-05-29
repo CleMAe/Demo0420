@@ -1135,7 +1135,7 @@
         "2026-05-14T08:01:14Z WARN  cache-miss key=user:88421",
         "2026-05-14T08:01:18Z ERROR payment-svc timeout upstream=db-primary",
         "2026-05-14T08:02:03Z ERROR api-gw 502 upstream=inventory-svc req_id=3f0c1d9a-12ab-4cde-9f00-1a2b3c4d5e6f"
-      ].join("\\n")) +
+      ].join("\n")) +
       '</textarea>' +
       '<div class="flex flex-wrap items-center gap-2">' +
       '<button type="button" data-action="analyze" class="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">分析日志</button>' +
@@ -1157,7 +1157,7 @@
 
     function splitLines(text) {
       return String(text || "")
-        .split(/\\r?\\n/)
+        .split(/\r?\n/)
         .map(function (x) { return x.trim(); })
         .filter(Boolean)
         .slice(0, 2000);
@@ -1239,7 +1239,7 @@
         "2026-05-14T08:01:18Z ERROR payment-svc timeout upstream=db-primary",
         "2026-05-14T08:02:03Z ERROR api-gw 502 upstream=inventory-svc req_id=3f0c1d9a-12ab-4cde-9f00-1a2b3c4d5e6f",
         "2026-05-14T08:02:04Z ERROR inventory-svc connection refused host=10.0.0.8:5432"
-      ].join("\\n");
+      ].join("\n");
     });
 
     bind(root, "[data-action=\"analyze\"]", "click", function () {
