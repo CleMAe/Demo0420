@@ -81,7 +81,7 @@ PRODUCTS_SEED: list[tuple[str, str, str, str | None, list[str], str | None, str,
     (
         "代码 Copilot 企业版",
         "IDE 内联补全与评审建议",
-        "https://example.com/copilot",
+        "copilot.html",
         "研发",
         ["ADMIN", "Director", "USER"],
         None,
