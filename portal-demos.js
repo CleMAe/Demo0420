@@ -1150,11 +1150,6 @@
       "</div>"
     ));
 
-    function apiBase() {
-      if (!window.location.host) return "http://127.0.0.1";
-      return "";
-    }
-
     function splitLines(text) {
       return String(text || "")
         .split(/\r?\n/)
@@ -2415,8 +2410,8 @@
     demoObjectDetect(root);
   }
 
-  function fallbackAiops(root) {
-    demoDevopsLogs(root);
+  function fallbackAiops(root, product) {
+    demoDevopsLogs(root, product);
   }
 
   function fallbackDialog(root) {
