@@ -41,12 +41,14 @@ PORTAL_BRAND_NAME = os.environ.get("PORTAL_BRAND_NAME", "智能体Demo平台")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 CUSTOMER_SCRIPT_PRODUCT_NAME = "客服话术优化"
+COPILOT_PRODUCT_NAME = "代码 Copilot 企业版"
 ENTERPRISE_GPT_PRODUCT_NAME = "企业 GPT 助手"
 COMPLIANCE_PRODUCT_NAME = "合规审查 AI"
 CLINICAL_PATHWAY_PRODUCT_NAME = "临床路径建议引擎"
 EMPLOYEE_TRAINING_PRODUCT_NAME = "员工自助：培训陪练"
 SMART_OFFICE_PRODUCT_NAME = "智能办公智能体"
 ADMIN_ROUTER_PRODUCT_NAME = "仅管理员：密钥与模型路由"
+DIRECTOR_SANDBOX_PRODUCT_NAME = "行业总监专区：战略沙盘"
 SMART_OFFICE_SCENARIOS: dict[str, str] = {
     "expense": "报销单据",
     "resume": "简历筛选",
@@ -63,6 +65,8 @@ FRONTEND_ASSETS = {
     "index.html": "index.html",
     "login.html": "login.html",
     "detail.html": "detail.html",
+    "copilot.html": "copilot.html",
+    "director-sandbox.html": "director-sandbox.html",
     "smart-office.html": "smart-office.html",
     "portal-brand.js": "portal-brand.js",
     "portal-demos.js": "portal-demos.js",
@@ -242,9 +246,9 @@ PRODUCTS_SEED: list[tuple[str, str, str, str | None, list[str], str | None, str,
         "支持按部门与角色配置可见范围，回答附带引用片段便于核对；适合人力、法务、运营等多条线降低重复答疑成本，并可与现有 IM 或门户集成。",
     ),
     (
-        "代码 Copilot 企业版",
+        COPILOT_PRODUCT_NAME,
         "IDE 内联补全与评审建议",
-        "https://example.com/copilot",
+        "copilot.html",
         "研发",
         ["ADMIN", "Director", "USER"],
         None,
@@ -353,9 +357,9 @@ PRODUCTS_SEED: list[tuple[str, str, str, str | None, list[str], str | None, str,
         "提供审计日志与紧急熔断能力，适合平台管理员统一治理成本与安全边界。",
     ),
     (
-        "行业总监专区：战略沙盘",
+        DIRECTOR_SANDBOX_PRODUCT_NAME,
         "多部门指标模拟（演示）",
-        "https://example.com/director-sandbox",
+        "director-sandbox.html",
         "战略",
         ["ADMIN", "Director"],
         None,
@@ -594,6 +598,14 @@ def init_db() -> None:
         conn.execute(
             "UPDATE products SET url = ? WHERE name = ?",
             ("", "问数智能体"),
+        )
+        conn.execute(
+            "UPDATE products SET url = ? WHERE name = ?",
+            ("copilot.html", COPILOT_PRODUCT_NAME),
+        )
+        conn.execute(
+            "UPDATE products SET url = ? WHERE name = ?",
+            ("director-sandbox.html", DIRECTOR_SANDBOX_PRODUCT_NAME),
         )
         conn.execute(
             "UPDATE products SET url = ? WHERE name = ?",

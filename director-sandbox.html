@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-portal-page="director-sandbox">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>行业总监专区：战略沙盘</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['ui-sans-serif', 'system-ui', 'Segoe UI', 'Roboto', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'] }
+        }
+      }
+    };
+  </script>
+</head>
+<body class="invisible min-h-screen bg-slate-50 text-slate-800 antialiased">
+  <!-- 顶部导航 -->
+  <header class="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur-md">
+    <div class="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6">
+      <div class="flex items-center gap-3">
+        <a href="index.html" class="text-sm font-medium text-orange-600 hover:text-orange-700">← 返回工作台</a>
+        <div class="h-6 w-px bg-slate-200"></div>
+        <div>
+          <p id="portal-brand-name" class="text-sm font-semibold text-slate-900">智能体Demo平台</p>
+          <p class="text-xs text-slate-500">行业总监专区：战略沙盘 · 多部门指标模拟</p>
+        </div>
+      </div>
+      <button id="btn-logout" type="button"
+        class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50">
+        退出
+      </button>
+    </div>
+  </header>
+
+  <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+    <!-- 场景选择器 -->
+    <div class="mb-6 rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm">
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 class="text-lg font-semibold text-slate-900">经营情景预设</h2>
+          <p class="mt-1 text-sm text-slate-500">选择不同行业场景，快速加载对应的指标基线与假设参数</p>
+        </div>
+        <select id="scenario-select" class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20">
+          <option value="finance">金融行业视角</option>
+          <option value="healthcare">医疗行业视角</option>
+          <option value="tech">科技行业视角</option>
+          <option value="general" selected>通用经营分析</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 主工作区 -->
+    <div class="grid gap-6 lg:grid-cols-[280px_1fr]">
+      <!-- 左侧模块库 -->
+      <aside class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+        <h3 class="mb-4 text-sm font-semibold text-slate-900">可添加模块</h3>
+        <p class="mb-4 text-xs text-slate-500">点击模块卡片添加到画布，拖拽调整位置</p>
+        
+        <div id="module-library" class="space-y-3">
+          <div class="cursor-pointer rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-4 transition hover:border-orange-300 hover:bg-orange-50" data-module="financial" draggable="true">
+            <div class="flex items-center gap-3">
+              <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+              </div>
+              <div>
+                <p class="text-sm font-medium text-slate-900">财务指标卡片</p>
+                <p class="text-xs text-slate-500">小尺寸 · 5项核心指标</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="cursor-pointer rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-4 transition hover:border-orange-300 hover:bg-orange-50" data-module="funnel" draggable="true">
+            <div class="flex items-center gap-3">
+              <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>
+              </div>
+              <div>
+                <p class="text-sm font-medium text-slate-900">业务漏斗图</p>
+                <p class="text-xs text-slate-500">中尺寸 · 转化率分析</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="cursor-pointer rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-4 transition hover:border-orange-300 hover:bg-orange-50" data-module="trend" draggable="true">
+            <div class="flex items-center gap-3">
+              <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100 text-purple-700">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
+              </div>
+              <div>
+                <p class="text-sm font-medium text-slate-900">市场趋势折线图</p>
+                <p class="text-xs text-slate-500">中尺寸 · 12个月趋势</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="cursor-pointer rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-4 transition hover:border-orange-300 hover:bg-orange-50" data-module="cost" draggable="true">
+            <div class="flex items-center gap-3">
+              <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"></path></svg>
+              </div>
+              <div>
+                <p class="text-sm font-medium text-slate-900">成本结构饼图</p>
+                <p class="text-xs text-slate-500">小尺寸 · 4项成本占比</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p class="text-xs leading-relaxed text-amber-800">
+            <span class="font-medium">💡 提示：</span>所有数据均为模拟演示，不构成真实经营建议。
+          </p>
+        </div>
+      </aside>
+
+      <!-- 中间画布区域 -->
+      <main>
+        <div id="canvas-area" class="min-h-[600px] rounded-2xl border-2 border-dashed border-slate-300 bg-white p-6">
+          <div id="empty-canvas-hint" class="flex h-full items-center justify-center text-center">
+            <div>
+              <svg class="mx-auto h-16 w-16 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+              <p class="mt-4 text-sm font-medium text-slate-500">画布为空</p>
+              <p class="mt-1 text-xs text-slate-400">请从左侧拖拽模块到此处</p>
+            </div>
+          </div>
+          <div id="modules-container" class="grid gap-4 sm:grid-cols-2"></div>
+        </div>
+
+        <!-- 全局假设参数调节 -->
+        <div class="mt-6 rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm">
+          <h3 class="mb-4 text-sm font-semibold text-slate-900">全局假设参数</h3>
+          <div class="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600">销售增长率</label>
+              <input type="range" id="param-sales" min="0" max="50" value="15" class="w-full accent-orange-500">
+              <p class="mt-1 text-xs text-slate-500 text-right"><span id="val-sales">15</span>%</p>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600">成本控制率</label>
+              <input type="range" id="param-cost" min="50" max="90" value="65" class="w-full accent-orange-500">
+              <p class="mt-1 text-xs text-slate-500 text-right"><span id="val-cost">65</span>%</p>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600">研发投入占比</label>
+              <input type="range" id="param-rd" min="5" max="30" value="12" class="w-full accent-orange-500">
+              <p class="mt-1 text-xs text-slate-500 text-right"><span id="val-rd">12</span>%</p>
+            </div>
+          </div>
+          <button type="button" id="btn-recalc" class="mt-4 rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600">
+            重新计算所有指标
+          </button>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      // 登录验证
+      var token = localStorage.getItem('portal_token');
+      if (!token) {
+        window.location.href = 'login.html';
+        return;
+      }
+
+      function apiBase() {
+        if (!window.location.host) {
+          return 'http://127.0.0.1';
+        }
+        return '';
+      }
+
+      fetch(apiBase() + '/api/products', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      })
+        .then(function(res) {
+          if (res.status === 401) {
+            localStorage.removeItem('portal_token');
+            localStorage.removeItem('portal_user');
+            window.location.href = 'login.html';
+            return Promise.reject(new Error('unauthorized'));
+          }
+          return res.json().then(function(data) {
+            if (!res.ok) throw new Error((data && data.detail) || '加载失败');
+            return data;
+          });
+        })
+        .then(function(products) {
+          var allowed = (products || []).some(function(p) {
+            return p.name === '行业总监专区：战略沙盘';
+          });
+          if (!allowed) {
+            window.location.href = 'index.html';
+            return;
+          }
+          document.body.classList.remove('invisible');
+        })
+        .catch(function(ex) {
+          if (ex.message === 'unauthorized') return;
+          window.location.href = 'index.html';
+        });
+
+      // 退出登录
+      document.getElementById('btn-logout').addEventListener('click', function () {
+        localStorage.removeItem('portal_token');
+        localStorage.removeItem('portal_user');
+        window.location.href = 'login.html';
+      });
+
+      // HTML 转义
+      function escapeHtml(s) {
+        if (!s) return '';
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      // 全局状态
+      var sandboxState = {
+        modules: [],
+        assumptions: {
+          salesGrowth: 15,
+          costRatio: 65,
+          rdInvestment: 12
+        },
+        scenario: 'general'
+      };
+
+      // ==================== 场景预设数据 ====================
+      var scenarios = {
+        finance: {
+          name: '金融行业视角',
+          assumptions: { salesGrowth: 8, costRatio: 70, rdInvestment: 5 },
+          baseData: {
+            revenueGrowth: 8.5,
+            grossMargin: 65.2,
+            netMargin: 28.4,
+            roe: 15.6,
+            cashFlow: 82,
+            funnel: [1000, 350, 180, 165],
+            marketShare: [18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
+            costs: [45, 25, 5, 25]
+          }
+        },
+        healthcare: {
+          name: '医疗行业视角',
+          assumptions: { salesGrowth: 12, costRatio: 68, rdInvestment: 18 },
+          baseData: {
+            revenueGrowth: 12.3,
+            grossMargin: 58.7,
+            netMargin: 18.9,
+            roe: 12.4,
+            cashFlow: 68,
+            funnel: [800, 280, 150, 138],
+            marketShare: [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
+            costs: [40, 30, 18, 12]
+          }
+        },
+        tech: {
+          name: '科技行业视角',
+          assumptions: { salesGrowth: 25, costRatio: 60, rdInvestment: 22 },
+          baseData: {
+            revenueGrowth: 28.6,
+            grossMargin: 72.3,
+            netMargin: 22.1,
+            roe: 18.9,
+            cashFlow: 75,
+            funnel: [1200, 480, 240, 210],
+            marketShare: [8, 10, 13, 16, 20, 24, 28, 32, 36, 40, 44, 48],
+            costs: [35, 25, 22, 18]
+          }
+        },
+        general: {
+          name: '通用经营分析',
+          assumptions: { salesGrowth: 15, costRatio: 65, rdInvestment: 12 },
+          baseData: {
+            revenueGrowth: 15.2,
+            grossMargin: 62.5,
+            netMargin: 21.3,
+            roe: 14.8,
+            cashFlow: 72,
+            funnel: [1000, 400, 200, 180],
+            marketShare: [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26],
+            costs: [38, 27, 12, 23]
+          }
+        }
+      };
+
+      // ==================== 模块渲染函数 ====================
+      
+      // 1. 财务指标卡片
+      function renderFinancialCard(data) {
+        return '<div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-module-type="financial">' +
+          '<div class="mb-3 flex items-center justify-between">' +
+          '<h4 class="text-sm font-semibold text-slate-900">财务指标卡片</h4>' +
+          '<button type="button" class="remove-module text-xs text-red-600 hover:text-red-700">删除</button>' +
+          '</div>' +
+          '<div class="space-y-3">' +
+          '<div class="flex items-center justify-between rounded-lg bg-emerald-50 p-3">' +
+          '<span class="text-xs text-slate-600">营收增长率</span>' +
+          '<span class="text-lg font-bold text-emerald-700">' + data.revenueGrowth.toFixed(1) + '%</span>' +
+          '</div>' +
+          '<div class="flex items-center justify-between rounded-lg bg-blue-50 p-3">' +
+          '<span class="text-xs text-slate-600">毛利率</span>' +
+          '<span class="text-lg font-bold text-blue-700">' + data.grossMargin.toFixed(1) + '%</span>' +
+          '</div>' +
+          '<div class="flex items-center justify-between rounded-lg bg-purple-50 p-3">' +
+          '<span class="text-xs text-slate-600">净利润率</span>' +
+          '<span class="text-lg font-bold text-purple-700">' + data.netMargin.toFixed(1) + '%</span>' +
+          '</div>' +
+          '<div class="flex items-center justify-between rounded-lg bg-amber-50 p-3">' +
+          '<span class="text-xs text-slate-600">ROE</span>' +
+          '<span class="text-lg font-bold text-amber-700">' + data.roe.toFixed(1) + '%</span>' +
+          '</div>' +
+          '<div class="flex items-center justify-between rounded-lg bg-slate-50 p-3">' +
+          '<span class="text-xs text-slate-600">现金流健康度</span>' +
+          '<span class="text-lg font-bold text-slate-700">' + data.cashFlow + '/100</span>' +
+          '</div>' +
+          '</div>' +
+          '</div>';
+      }
+
+      // 2. 业务漏斗图
+      function renderFunnelChart(data) {
+        var stages = ['线索', '商机', '签约', '回款'];
+        var colors = ['bg-blue-500', 'bg-indigo-500', 'bg-purple-500', 'bg-pink-500'];
+        var maxVal = Math.max.apply(null, data.funnel);
+        
+        var barsHtml = data.funnel.map(function(val, idx) {
+          var width = (val / maxVal * 100).toFixed(0);
+          var conversion = idx > 0 ? ((val / data.funnel[idx-1]) * 100).toFixed(1) : 100;
+          var isBottleneck = idx > 0 && conversion < 60;
+          
+          return '<div class="relative">' +
+            '<div class="mb-1 flex items-center justify-between text-xs">' +
+            '<span class="font-medium text-slate-700">' + stages[idx] + '</span>' +
+            '<span class="' + (isBottleneck ? 'text-red-600 font-semibold' : 'text-slate-500') + '">' + val + ' (' + conversion + '%)</span>' +
+            '</div>' +
+            '<div class="h-8 overflow-hidden rounded-lg bg-slate-100">' +
+            '<div class="h-full ' + colors[idx] + ' transition-all" style="width: ' + width + '%"></div>' +
+            '</div>' +
+            (isBottleneck ? '<p class="mt-1 text-[10px] text-red-600">⚠ 瓶颈环节</p>' : '') +
+            '</div>';
+        }).join('');
+
+        return '<div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:col-span-2" data-module-type="funnel">' +
+          '<div class="mb-3 flex items-center justify-between">' +
+          '<h4 class="text-sm font-semibold text-slate-900">业务漏斗图</h4>' +
+          '<button type="button" class="remove-module text-xs text-red-600 hover:text-red-700">删除</button>' +
+          '</div>' +
+          '<div class="space-y-3">' + barsHtml + '</div>' +
+          '<p class="mt-3 text-xs text-slate-500">各阶段转化率可调，瓶颈环节自动高亮</p>' +
+          '</div>';
+      }
+
+      // 3. 市场趋势折线图（简化版）
+      function renderTrendChart(data) {
+        var months = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+        var maxShare = Math.max.apply(null, data.marketShare);
+        var minShare = Math.min.apply(null, data.marketShare);
+        var range = maxShare - minShare || 1;
+        
+        // 生成 SVG 折线
+        var points = data.marketShare.map(function(val, idx) {
+          var x = (idx / 11 * 100).toFixed(1);
+          var y = (100 - (val - minShare) / range * 80 - 10).toFixed(1);
+          return x + ',' + y;
+        }).join(' ');
+
+        var lastValue = data.marketShare[data.marketShare.length - 1];
+        var predicted = (lastValue * (1 + sandboxState.assumptions.salesGrowth / 100)).toFixed(1);
+
+        return '<div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:col-span-2" data-module-type="trend">' +
+          '<div class="mb-3 flex items-center justify-between">' +
+          '<h4 class="text-sm font-semibold text-slate-900">市场趋势折线图</h4>' +
+          '<button type="button" class="remove-module text-xs text-red-600 hover:text-red-700">删除</button>' +
+          '</div>' +
+          '<div class="relative h-48 w-full">' +
+          '<svg class="h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">' +
+          '<polyline fill="none" stroke="#f97316" stroke-width="2" points="' + points + '"></polyline>' +
+          data.marketShare.map(function(val, idx) {
+            var x = (idx / 11 * 100).toFixed(1);
+            var y = (100 - (val - minShare) / range * 80 - 10).toFixed(1);
+            return '<circle cx="' + x + '" cy="' + y + '" r="1.5" fill="#f97316"></circle>';
+          }).join('') +
+          '</svg>' +
+          '</div>' +
+          '<div class="mt-3 flex items-center justify-between text-xs text-slate-600">' +
+          '<span>' + months[0] + '</span>' +
+          '<span class="font-medium text-orange-600">当前份额：' + lastValue + '%</span>' +
+          '<span>' + months[11] + '</span>' +
+          '</div>' +
+          '<div class="mt-2 rounded-lg bg-purple-50 p-3">' +
+          '<p class="text-xs text-purple-800"><span class="font-medium">预测曲线：</span>基于销售增长率 ' + sandboxState.assumptions.salesGrowth + '%，预计下月份额达 <strong>' + predicted + '%</strong></p>' +
+          '</div>' +
+          '</div>';
+      }
+
+      // 4. 成本结构饼图（CSS conic-gradient 实现）
+      function renderCostPieChart(data) {
+        var categories = ['人力成本', '运营成本', '研发投入', '营销费用'];
+        var colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
+        var total = data.costs.reduce(function(a, b) { return a + b; }, 0);
+        
+        // 计算渐变角度
+        var gradientParts = [];
+        var currentAngle = 0;
+        data.costs.forEach(function(val, idx) {
+          var angle = (val / total * 360);
+          gradientParts.push(colors[idx] + ' ' + currentAngle + 'deg ' + (currentAngle + angle) + 'deg');
+          currentAngle += angle;
+        });
+
+        var legendHtml = data.costs.map(function(val, idx) {
+          var pct = (val / total * 100).toFixed(1);
+          return '<div class="flex items-center gap-2">' +
+            '<div class="h-3 w-3 rounded-full" style="background-color: ' + colors[idx] + '"></div>' +
+            '<span class="text-xs text-slate-600">' + categories[idx] + '</span>' +
+            '<span class="ml-auto text-xs font-medium text-slate-900">' + pct + '%</span>' +
+            '</div>';
+        }).join('');
+
+        return '<div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-module-type="cost">' +
+          '<div class="mb-3 flex items-center justify-between">' +
+          '<h4 class="text-sm font-semibold text-slate-900">成本结构饼图</h4>' +
+          '<button type="button" class="remove-module text-xs text-red-600 hover:text-red-700">删除</button>' +
+          '</div>' +
+          '<div class="flex items-center gap-4">' +
+          '<div class="h-32 w-32 shrink-0 rounded-full" style="background: conic-gradient(' + gradientParts.join(', ') + ')"></div>' +
+          '<div class="min-w-0 flex-1 space-y-2">' + legendHtml + '</div>' +
+          '</div>' +
+          '<p class="mt-3 text-xs text-slate-500">总成本基数：100% · 各项占比可调</p>' +
+          '</div>';
+      }
+
+      // ==================== 模块管理逻辑 ====================
+      var moduleRenderers = {
+        financial: renderFinancialCard,
+        funnel: renderFunnelChart,
+        trend: renderTrendChart,
+        cost: renderCostPieChart
+      };
+
+      function addModule(moduleType) {
+        var scenario = scenarios[sandboxState.scenario];
+        var data = JSON.parse(JSON.stringify(scenario.baseData)); // 深拷贝
+        
+        // 根据假设参数调整数据
+        data.revenueGrowth = scenario.baseData.revenueGrowth * (sandboxState.assumptions.salesGrowth / 15);
+        data.grossMargin = scenario.baseData.grossMargin * (1 + (100 - sandboxState.assumptions.costRatio) / 500);
+        data.netMargin = scenario.baseData.netMargin * (1 + (sandboxState.assumptions.salesGrowth - 15) / 100);
+        
+        sandboxState.modules.push({
+          type: moduleType,
+          id: Date.now(),
+          data: data
+        });
+        
+        renderCanvas();
+      }
+
+      function removeModule(moduleId) {
+        sandboxState.modules = sandboxState.modules.filter(function(m) { return m.id !== moduleId; });
+        renderCanvas();
+      }
+
+      function renderCanvas() {
+        var container = document.getElementById('modules-container');
+        var emptyHint = document.getElementById('empty-canvas-hint');
+        
+        if (sandboxState.modules.length === 0) {
+          emptyHint.classList.remove('hidden');
+          container.innerHTML = '';
+          return;
+        }
+        
+        emptyHint.classList.add('hidden');
+        
+        // 根据当前假设参数重新计算所有模块数据
+        var scenario = scenarios[sandboxState.scenario];
+        
+        container.innerHTML = sandboxState.modules.map(function(module) {
+          // 深拷贝基线数据
+          var updatedData = JSON.parse(JSON.stringify(scenario.baseData));
+          
+          // 根据当前假设参数动态计算
+          var salesFactor = sandboxState.assumptions.salesGrowth / 15;
+          var costFactor = sandboxState.assumptions.costRatio / 65;
+          var rdFactor = sandboxState.assumptions.rdInvestment / 12;
+          
+          updatedData.revenueGrowth = scenario.baseData.revenueGrowth * salesFactor;
+          updatedData.grossMargin = scenario.baseData.grossMargin * (1 + (100 - sandboxState.assumptions.costRatio) / 500);
+          updatedData.netMargin = scenario.baseData.netMargin * (1 + (sandboxState.assumptions.salesGrowth - 15) / 100);
+          
+          // 漏斗图数据调整
+          updatedData.funnel = scenario.baseData.funnel.map(function(val) {
+            return Math.round(val * salesFactor);
+          });
+          
+          // 成本结构数据调整
+          updatedData.costs = [
+            Math.round(scenario.baseData.costs[0] * costFactor),
+            Math.round(scenario.baseData.costs[1] * costFactor),
+            Math.round(scenario.baseData.costs[2] * rdFactor),
+            Math.round(scenario.baseData.costs[3])
+          ];
+          
+          var renderer = moduleRenderers[module.type];
+          return renderer ? renderer(updatedData) : '';
+        }).join('');
+        
+        // 绑定删除按钮事件
+        container.querySelectorAll('.remove-module').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var moduleEl = btn.closest('[data-module-type]');
+            // 简单处理：重新渲染时根据顺序匹配
+            var index = Array.from(container.querySelectorAll('[data-module-type]')).indexOf(moduleEl);
+            if (index >= 0 && index < sandboxState.modules.length) {
+              removeModule(sandboxState.modules[index].id);
+            }
+          });
+        });
+      }
+
+      // ==================== 事件绑定 ====================
+      
+      // 模块库拖拽添加
+      document.querySelectorAll('#module-library [data-module]').forEach(function(card) {
+        card.addEventListener('dragstart', function(e) {
+          e.dataTransfer.setData('text/plain', card.getAttribute('data-module'));
+          e.dataTransfer.effectAllowed = 'copy';
+        });
+      });
+
+      // 画布区域接收拖拽
+      var canvasArea = document.getElementById('canvas-area');
+      canvasArea.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        canvasArea.classList.add('border-orange-400', 'bg-orange-50');
+      });
+
+      canvasArea.addEventListener('dragleave', function(e) {
+        canvasArea.classList.remove('border-orange-400', 'bg-orange-50');
+      });
+
+      canvasArea.addEventListener('drop', function(e) {
+        e.preventDefault();
+        canvasArea.classList.remove('border-orange-400', 'bg-orange-50');
+        var moduleType = e.dataTransfer.getData('text/plain');
+        if (moduleType) {
+          addModule(moduleType);
+        }
+      });
+
+      // 场景选择
+      document.getElementById('scenario-select').addEventListener('change', function(e) {
+        sandboxState.scenario = e.target.value;
+        var scenario = scenarios[sandboxState.scenario];
+        
+        // 更新假设参数
+        sandboxState.assumptions = JSON.parse(JSON.stringify(scenario.assumptions));
+        document.getElementById('param-sales').value = scenario.assumptions.salesGrowth;
+        document.getElementById('param-cost').value = scenario.assumptions.costRatio;
+        document.getElementById('param-rd').value = scenario.assumptions.rdInvestment;
+        document.getElementById('val-sales').textContent = scenario.assumptions.salesGrowth;
+        document.getElementById('val-cost').textContent = scenario.assumptions.costRatio;
+        document.getElementById('val-rd').textContent = scenario.assumptions.rdInvestment;
+        
+        // 重新渲染所有模块
+        renderCanvas();
+      });
+
+      // 假设参数滑块（实时响应）
+      ['sales', 'cost', 'rd'].forEach(function(param) {
+        var slider = document.getElementById('param-' + param);
+        var display = document.getElementById('val-' + param);
+        
+        slider.addEventListener('input', function() {
+          display.textContent = slider.value;
+          var key = param === 'sales' ? 'salesGrowth' : param === 'cost' ? 'costRatio' : 'rdInvestment';
+          sandboxState.assumptions[key] = parseInt(slider.value);
+          // 实时更新所有模块
+          renderCanvas();
+        });
+      });
+
+      // 重新计算按钮
+      document.getElementById('btn-recalc').addEventListener('click', function() {
+        renderCanvas();
+      });
+
+      // 初始化
+      renderCanvas();
+    })();
+  </script>
+  <script src="portal-brand.js?v=20260526-docker-static"></script>
+</body>
+</html>
