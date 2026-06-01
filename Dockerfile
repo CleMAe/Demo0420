@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir \
     --timeout "${PIP_DEFAULT_TIMEOUT}" \
     -r requirements.txt
 
-COPY main.py login.html index.html detail.html copilot.html director-sandbox.html smart-office.html smart-office.js portal-brand.js portal-demos.js ./
+COPY main.py *.html portal-brand.js portal-demos.js agent-workbench.js smart-office.js ./
 COPY docs ./docs
 
 EXPOSE 8000

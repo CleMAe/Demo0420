@@ -261,6 +261,7 @@
   }
 
   function demoCopilot(root) {
+    var inStandalone = /\/copilot\.html(?:$|[?#])/.test(window.location.pathname + window.location.search);
     root.innerHTML = shell("IDE 内联补全与评审建议", (
       '<div class="space-y-4">' +
       '<div class="rounded-xl border border-slate-200 bg-slate-900 p-4 font-mono text-xs text-slate-100">' +
@@ -271,13 +272,21 @@
       '<button type="button" data-action="complete" class="mt-3 rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600">' +
       "生成补全" +
       "</button></div>" +
+      (inStandalone ? (
+      '<div class="grid gap-3 sm:grid-cols-3">' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4"><p class="text-xs text-slate-500">代码审查</p><p class="mt-1 text-sm font-medium text-slate-900">安全漏洞、反模式与性能建议</p></div>' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4"><p class="text-xs text-slate-500">重构建议</p><p class="mt-1 text-sm font-medium text-slate-900">复杂度降低与职责拆分</p></div>' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4"><p class="text-xs text-slate-500">规范检查</p><p class="mt-1 text-sm font-medium text-slate-900">命名、注释、安全与性能清单</p></div>' +
+      '</div>'
+      ) : (
       '<div class="rounded-xl border border-amber-200 bg-amber-50 p-4">' +
       '<p class="text-sm font-medium text-amber-900 mb-2">💡 完整功能工作台</p>' +
       '<p class="text-xs leading-relaxed text-amber-800 mb-3">当前为简化预览。完整版本包含多语言代码补全、代码审查、重构建议和企业规范检查等四大功能模块。</p>' +
       '<a href="copilot.html" class="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600">' +
       '进入完整工作台 →' +
       '</a>' +
-      '</div>' +
+      '</div>'
+      )) +
       '</div>'
     ));
     bind(root, "[data-action=\"complete\"]", "click", function () {

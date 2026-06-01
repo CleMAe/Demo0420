@@ -16,12 +16,15 @@
   </script>
 </head>
 <body class="min-h-screen bg-slate-50 text-slate-800 antialiased">
-  <header class="sticky top-0 z-10 border-b border-slate-200/80 bg-white/90 backdrop-blur-md">
-    <div class="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
-      <div class="min-w-0">
-        <a href="index.html" class="text-sm font-medium text-orange-600 hover:text-orange-700">← 返回工作台</a>
-        <h1 class="mt-1 text-lg font-semibold tracking-tight text-slate-900">智能办公智能体</h1>
-        <p class="text-xs text-slate-500">多流程文档审查 · DeepSeek 大模型</p>
+  <header class="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur-md">
+    <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
+      <div class="flex min-w-0 items-center gap-3">
+        <a href="index.html" class="shrink-0 text-sm font-medium text-sky-700 hover:text-sky-800">← 工作台</a>
+        <div class="hidden h-6 w-px bg-slate-200 sm:block"></div>
+        <div class="min-w-0">
+          <p id="portal-brand-name" class="truncate text-sm font-semibold text-slate-900">智能体Demo平台</p>
+          <p class="truncate text-xs text-slate-500">多流程文档审查 · DeepSeek 大模型</p>
+        </div>
       </div>
       <button id="btn-logout" type="button"
         class="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition hover:bg-slate-50">
@@ -30,10 +33,43 @@
     </div>
   </header>
 
-  <main class="mx-auto max-w-5xl px-4 py-8 sm:px-6 sm:py-10">
+  <main class="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10">
     <p id="load-err" class="hidden rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"></p>
 
-    <section id="config-panel" class="mb-6 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6">
+    <section class="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_360px]">
+      <div class="min-w-0">
+        <div class="flex flex-wrap gap-2">
+          <span class="rounded-lg bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">办公</span>
+          <span class="rounded-lg bg-white px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">跨行业通用</span>
+          <span class="rounded-lg bg-white px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">NLP 与文档智能</span>
+        </div>
+        <h1 class="mt-5 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">智能办公智能体</h1>
+        <p class="mt-3 max-w-3xl text-base leading-relaxed text-slate-600">多流程文档审查与办公协同，覆盖报销单据、简历筛选、招标文件和合同审核。</p>
+        <div class="mt-6 grid gap-3 sm:grid-cols-2">
+          <div class="rounded-2xl border border-sky-200 bg-white p-5 shadow-sm">
+            <p class="text-2xl font-semibold tracking-tight text-slate-950">4 类</p>
+            <p class="mt-1 text-xs font-medium text-slate-500">文档场景</p>
+          </div>
+          <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-2xl font-semibold tracking-tight text-slate-950">结构化</p>
+            <p class="mt-1 text-xs font-medium text-slate-500">审查输出</p>
+          </div>
+        </div>
+      </div>
+      <aside class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">模块概览</p>
+        <div class="mt-4 space-y-3">
+          <p class="text-sm leading-relaxed text-slate-600">统一覆盖出差报销单据自然语言审查、人事简历筛选、招采招标文件查重和法务合同文件审核。</p>
+          <p class="text-sm leading-relaxed text-slate-600">支持规则+模型双引擎，输出可解释审查依据与风险分级，帮助行政、人事、采购、法务协同提效。</p>
+        </div>
+        <div class="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p class="text-xs font-medium text-slate-500">当前页面</p>
+          <p class="mt-1 break-all font-mono text-xs text-slate-700">smart-office.html</p>
+        </div>
+      </aside>
+    </section>
+
+    <section id="config-panel" class="mt-8 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 class="text-sm font-semibold text-slate-900">大模型 API Key 配置</h2>
@@ -54,7 +90,15 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash</pre>
     </section>
 
-    <section class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6">
+    <section class="mt-6 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6">
+      <div class="mb-5 flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">交互演示</p>
+          <h2 class="mt-1 text-lg font-semibold tracking-tight text-slate-900">智能办公文档审查</h2>
+          <p class="mt-1 text-xs leading-relaxed text-slate-500">以下为演示输入和结构化审查输出，不会在浏览器保存 API Key。</p>
+        </div>
+        <span class="shrink-0 rounded-lg bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">独立工作台</span>
+      </div>
       <div id="scenario-tabs" class="flex flex-wrap gap-2 border-b border-slate-100 pb-4"></div>
       <div class="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50/60 p-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
