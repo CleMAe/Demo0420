@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 详情页交互演示沙箱：纯前端模拟，与门户 Tailwind 风格一致。
  * 按产品 name 精确匹配；否则按 tech_stack 回退。
  */
@@ -1768,13 +1768,62 @@
   }
 
   function demoTrainBot(root, product) {
+    var SCENARIOS = [
+      {
+        id: "price",
+        label: "价格异议",
+        opening: "你们比竞品贵 15%，凭什么？如果只能讲概念，我很难往下推进。",
+        placeholder: "例如：我们先用 PoC 和合同指标验证效果",
+        localGood: "先认同客户对预算的敏感，再讲清 ROI 与服务差异，并给出可验证的下一步，避免直接降价。",
+        localDefault: "建议先共情再陈述价值锚点，可补充案例、SLA 或风险共担条款，避免陷入单纯比价。",
+        dims: [
+          { name: "共情", keys: ["理解", "明白", "感受", "确实", "抱歉"] },
+          { name: "价值陈述", keys: ["价值", "roi", "回报", "服务", "质量", "案例", "sla", "保障", "差异"] },
+          { name: "下一步承诺", keys: ["方案", "演示", "安排", "约", "下一步", "确认", "试用", "poc"] }
+        ]
+      },
+      {
+        id: "compliance",
+        label: "合规返点",
+        opening: "能不能私下给我返点？大家都这么操作。你能不能灵活一点？",
+        placeholder: "例如：返点不能私下承诺，我们按正式商务流程给您方案",
+        localGood: "拒绝明确、语气平稳，并引用制度说明正规渠道；可主动介绍合规替代方案，避免含糊或口头承诺。",
+        localDefault: "需明确拒绝私下返点，引用公司制度与审批流程，并引导客户走正规商务路径。",
+        dims: [
+          { name: "拒绝明确", keys: ["不能", "无法", "不可以", "不行", "违规", "不允许"] },
+          { name: "引用制度", keys: ["制度", "规定", "流程", "审批", "合规", "书面", "合同"] },
+          { name: "合规引导", keys: ["正规", "渠道", "替代", "介绍", "说明", "官方"] }
+        ]
+      },
+      {
+        id: "complaint",
+        label: "配送投诉",
+        opening: "等了一周还没送到，必须给我说法！你们到底能不能解决？",
+        placeholder: "例如：抱歉让您久等，我马上核实物流并今天回访",
+        localGood: "先安抚情绪并致歉，再说明核查动作与时效承诺，给出明确回访方式，避免空泛推诿。",
+        localDefault: "建议先表达理解与歉意，承诺具体核查时限，并告知后续联系渠道，避免使用推诿表述。",
+        dims: [
+          { name: "共情", keys: ["理解", "抱歉", "不好意思", "感受", "等待", "着急"] },
+          { name: "处理动作", keys: ["查", "核实", "跟进", "处理", "补偿", "时效", "今天", "立即"] },
+          { name: "回访承诺", keys: ["回访", "联系", "确认", "电话", "短信", "小时", "内"] }
+        ]
+      }
+    ];
     var history = [];
     var round = 0;
-    var opening = "你们比竞品贵 15%，凭什么？如果只能讲概念，我很难往下推进。";
 
     root.innerHTML = shell("合规陪练舱", (
       '<div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 mb-4">' +
       "输入 <code class=\"rounded bg-white/70 px-1\">/end</code> 可结束演练并生成教练复盘。对话通过后端接口返回，便于统一权限与后续模型接入。" +
+      "</div>" +
+      '<div class="mb-3 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">' +
+      '<label class="text-xs font-medium text-slate-600">陪练场景' +
+      '<select data-field="scenario" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      SCENARIOS.map(function (scenario) {
+        return '<option value="' + escapeHtml(scenario.id) + '">' + escapeHtml(scenario.label) + "</option>";
+      }).join("") +
+      "</select></label>" +
+      '<button type="button" data-action="reset" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">重来</button>' +
       "</div>" +
       '<div data-slot="chat" class="max-h-80 space-y-3 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"></div>' +
       '<div class="mt-3 flex flex-col gap-2 sm:flex-row">' +
@@ -1784,6 +1833,7 @@
       '<button type="button" data-action="end" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">结束</button>' +
       "</div>" +
       '<p data-slot="status" class="mt-2 hidden text-xs text-slate-500"></p>' +
+      '<p data-slot="score" class="mt-2 hidden rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-600"></p>' +
       '<div data-slot="coach" class="mt-3 hidden rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm leading-relaxed text-slate-700"></div>'
     ));
 
@@ -1791,10 +1841,50 @@
     var input = root.querySelector("[data-field=\"reply\"]");
     var send = root.querySelector("[data-action=\"send\"]");
     var end = root.querySelector("[data-action=\"end\"]");
+    var reset = root.querySelector("[data-action=\"reset\"]");
+    var scenarioSelect = root.querySelector("[data-field=\"scenario\"]");
     var coach = root.querySelector("[data-slot=\"coach\"]");
+    var scoreLine = root.querySelector("[data-slot=\"score\"]");
     var statusLine = root.querySelector("[data-slot=\"status\"]");
-    var sessionId = "training-" + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now()));
+    var sessionId = newSessionId();
     var locked = false;
+
+    function newSessionId() {
+      return "training-" + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now()));
+    }
+
+    function getScenario() {
+      var id = scenarioSelect ? scenarioSelect.value : SCENARIOS[0].id;
+      for (var i = 0; i < SCENARIOS.length; i++) {
+        if (SCENARIOS[i].id === id) return SCENARIOS[i];
+      }
+      return SCENARIOS[0];
+    }
+
+    function hitDim(reply, dim) {
+      var text = String(reply || "").toLowerCase();
+      for (var i = 0; i < dim.keys.length; i++) {
+        if (text.indexOf(String(dim.keys[i]).toLowerCase()) >= 0) return true;
+      }
+      return false;
+    }
+
+    function localFeedback(scenario, reply) {
+      var hits = 0;
+      var parts = [];
+      for (var i = 0; i < scenario.dims.length; i++) {
+        var dim = scenario.dims[i];
+        var ok = hitDim(reply, dim);
+        if (ok) hits += 1;
+        parts.push(dim.name + " " + (ok ? "OK" : "待补"));
+      }
+      var grade = hits >= scenario.dims.length ? "A" : hits >= 2 ? "B" : "C";
+      return {
+        grade: grade,
+        text: "本轮要点命中：" + parts.join(" / ") + "；综合 " + grade + "。教练提示：" +
+          (hits >= 2 ? scenario.localGood : scenario.localDefault)
+      };
+    }
 
     function append(role, text) {
       var label = role === "user" ? "我" : role === "coach" ? "教练" : "李总";
@@ -1815,6 +1905,8 @@
       input.disabled = busy;
       send.disabled = busy;
       end.disabled = busy;
+      reset.disabled = busy;
+      scenarioSelect.disabled = busy;
       send.textContent = busy ? "生成中…" : "发送";
     }
 
@@ -1835,6 +1927,36 @@
       end.disabled = true;
       send.textContent = "已结束";
       end.textContent = "已结束";
+    }
+
+    function showLocalScore(reply) {
+      var feedback = localFeedback(getScenario(), reply);
+      scoreLine.classList.remove("hidden");
+      scoreLine.textContent = feedback.text;
+    }
+
+    function resetRound() {
+      var scenario = getScenario();
+      history = [];
+      round = 0;
+      locked = false;
+      sessionId = newSessionId();
+      chat.innerHTML = "";
+      coach.classList.add("hidden");
+      coach.innerHTML = "";
+      scoreLine.classList.add("hidden");
+      scoreLine.textContent = "";
+      setStatus("");
+      input.disabled = false;
+      send.disabled = false;
+      end.disabled = false;
+      reset.disabled = false;
+      scenarioSelect.disabled = false;
+      send.textContent = "发送";
+      end.textContent = "结束";
+      input.value = "";
+      input.placeholder = "输入你的回应…例如：" + scenario.placeholder.replace(/^例如：/, "");
+      append("assistant", scenario.opening);
     }
 
     function handleStreamEvent(block) {
@@ -1900,6 +2022,7 @@
       if (!value || send.disabled) return;
       round += 1;
       append("user", value);
+      if (value !== "/end") showLocalScore(value);
       input.value = "";
       locked = false;
       setBusy(true);
@@ -1925,7 +2048,9 @@
         });
     }
 
-    append("assistant", opening);
+    resetRound();
+    bind(root, "[data-field=\"scenario\"]", "change", resetRound);
+    bind(root, "[data-action=\"reset\"]", "click", resetRound);
     bind(root, "[data-action=\"send\"]", "click", function () {
       sendMessage(input.value);
     });
