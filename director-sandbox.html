@@ -15,7 +15,7 @@
     };
   </script>
 </head>
-<body class="min-h-screen bg-slate-50 text-slate-800 antialiased">
+<body class="invisible min-h-screen bg-slate-50 text-slate-800 antialiased">
   <!-- 顶部导航 -->
   <header class="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur-md">
     <div class="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6">
@@ -164,6 +164,43 @@
         window.location.href = 'login.html';
         return;
       }
+
+      function apiBase() {
+        if (!window.location.host) {
+          return 'http://127.0.0.1';
+        }
+        return '';
+      }
+
+      fetch(apiBase() + '/api/products', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      })
+        .then(function(res) {
+          if (res.status === 401) {
+            localStorage.removeItem('portal_token');
+            localStorage.removeItem('portal_user');
+            window.location.href = 'login.html';
+            return Promise.reject(new Error('unauthorized'));
+          }
+          return res.json().then(function(data) {
+            if (!res.ok) throw new Error((data && data.detail) || '加载失败');
+            return data;
+          });
+        })
+        .then(function(products) {
+          var allowed = (products || []).some(function(p) {
+            return p.name === '行业总监专区：战略沙盘';
+          });
+          if (!allowed) {
+            window.location.href = 'index.html';
+            return;
+          }
+          document.body.classList.remove('invisible');
+        })
+        .catch(function(ex) {
+          if (ex.message === 'unauthorized') return;
+          window.location.href = 'index.html';
+        });
 
       // 退出登录
       document.getElementById('btn-logout').addEventListener('click', function () {

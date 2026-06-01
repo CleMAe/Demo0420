@@ -42,41 +42,222 @@
     if (el) el.addEventListener(event, handler);
   }
 
+  function apiBase() {
+    if (!window.location.host) return "http://127.0.0.1";
+    return "";
+  }
+
+  function authHeaders(extra) {
+    var headers = extra || {};
+    var token = localStorage.getItem("portal_token");
+    if (token) headers.Authorization = "Bearer " + token;
+    return headers;
+  }
+
   // --- 按产品名称 ---
 
-  function demoEnterpriseGpt(root) {
-    root.innerHTML = shell("企业知识检索（RAG）", (
-      '<div class="space-y-4">' +
-      '<label class="block text-xs font-medium text-slate-600">向内部知识库提问</label>' +
-      '<div class="flex flex-col gap-2 sm:flex-row">' +
-      '<input type="text" data-field="q" value="新员工如何申请年假？" ' +
+  function demoEnterpriseGpt(root, product) {
+    root.innerHTML = shell("内部知识库问答与文档摘要", (
+      '<p class="text-sm leading-relaxed text-slate-600">' +
+      '面向企业内部的检索增强生成（RAG）场景，将分散在<strong class="text-slate-800">制度、工单与项目文档</strong>中的知识统一索引。' +
+      '演示知识库来自 <code class="rounded bg-slate-100 px-1 text-xs">docs/员工手册.md</code>，回答附带引用片段便于核对。' +
+      "</p>" +
+      '<div class="mt-4 flex flex-wrap gap-2 text-xs" data-slot="sources"></div>' +
+      '<div class="mt-4">' +
+      '<label class="text-xs font-medium text-slate-600">知识条线</label>' +
+      '<select data-field="line" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm sm:max-w-md">' +
+      "<option>人力 · 制度与休假</option>" +
+      "<option>法务 · 保密与合规</option>" +
+      "<option>运营 · 流程与报销</option>" +
+      "</select></div>" +
+      '<label class="mt-4 block text-xs font-medium text-slate-600">向内部知识库提问</label>' +
+      '<div class="mt-1 flex flex-wrap gap-2" data-slot="presets"></div>' +
+      '<div class="mt-2 flex flex-col gap-2 sm:flex-row">' +
+      '<input type="text" data-field="q" placeholder="输入问题，例如：新员工如何申请年假？" ' +
       'class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-2.5 text-sm outline-none ring-orange-500/20 transition focus:border-orange-500 focus:bg-white focus:ring-4" />' +
       '<button type="button" data-action="ask" ' +
-      'class="rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600">' +
-      "模拟检索" +
+      'class="rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">' +
+      "检索问答" +
       "</button></div>" +
       '<div data-slot="out" class="hidden rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm leading-relaxed text-slate-700"></div>' +
       "</div>"
     ));
+
+    function apiBase() {
+      if (!window.location.host) return "http://127.0.0.1";
+      return "";
+    }
+
+    var state = {
+      presetQuestions: [
+        "新员工如何申请年假？",
+        "差旅报销要在多久内提交？",
+        "员工能否把内部文档上传到外部大模型？"
+      ],
+      handbookAvailable: true
+    };
+
+    function renderCitationPanel(label, body) {
+      return (
+        '<details class="mt-2 rounded-lg border border-amber-200 bg-amber-50/80">' +
+        '<summary class="cursor-pointer px-3 py-2 text-xs font-medium text-amber-900">' +
+        escapeHtml(label) +
+        "</summary>" +
+        '<pre class="whitespace-pre-wrap border-t border-amber-200/80 px-3 py-2 font-sans text-xs leading-relaxed text-amber-950">' +
+        escapeHtml(body) +
+        "</pre></details>"
+      );
+    }
+
+    function renderSourceTags(sources) {
+      var slot = root.querySelector("[data-slot=\"sources\"]");
+      if (!slot) return;
+      var list = Array.isArray(sources) ? sources : [];
+      if (!list.length) {
+        slot.innerHTML = '<span class="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600">制度 · 员工手册.md</span>';
+        return;
+      }
+      slot.innerHTML = list.map(function (item) {
+        return (
+          '<span class="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600">' +
+          escapeHtml(item.label || "") +
+          "</span>"
+        );
+      }).join("");
+    }
+
+    function renderPresetButtons() {
+      var slot = root.querySelector("[data-slot=\"presets\"]");
+      if (!slot) return;
+      var labels = ["年假申请", "差旅报销", "保密义务"];
+      slot.innerHTML = state.presetQuestions.map(function (q, index) {
+        return (
+          '<button type="button" data-preset="' + escapeHtml(q) + '" ' +
+          'class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 transition hover:border-orange-300 hover:text-orange-700">' +
+          escapeHtml(labels[index] || ("预设 " + (index + 1))) +
+          "</button>"
+        );
+      }).join("");
+      slot.querySelectorAll("[data-preset]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var inp = root.querySelector("[data-field=\"q\"]");
+          if (inp) inp.value = btn.getAttribute("data-preset") || "";
+        });
+      });
+    }
+
+    function renderAnswer(data) {
+      var citations = (data && data.citations) || [];
+      var cites = citations.map(function (item) {
+        if (!item || !item.title) return "";
+        return renderCitationPanel(item.title, item.excerpt || "");
+      }).join("");
+      return (
+        '<p class="font-medium text-slate-900">摘要回答</p>' +
+        '<p class="mt-2 text-sm leading-relaxed text-slate-700">' + escapeHtml(data.summary || "") + "</p>" +
+        '<p class="mt-3 text-xs text-slate-500">可见范围：' + escapeHtml(data.visibility_role || "") +
+        " · 知识条线：" + escapeHtml(data.knowledge_line || "") + "</p>" +
+        '<div class="mt-3">' + cites + "</div>" +
+        '<p class="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">' +
+        "可与现有 IM 或门户集成推送回答（演示占位）。问题：" + escapeHtml(data.question || "") +
+        "</p>"
+      );
+    }
+
+    function loadSources() {
+      var token = localStorage.getItem("portal_token");
+      var productId = product && product.id;
+      if (!token || !productId) {
+        renderSourceTags([]);
+        renderPresetButtons();
+        return Promise.resolve();
+      }
+      return fetch(apiBase() + "/api/enterprise-gpt/sources?product_id=" + encodeURIComponent(productId), {
+        headers: { "Authorization": "Bearer " + token }
+      })
+        .then(function (res) {
+          return res.json().then(function (body) {
+            if (!res.ok) throw new Error((body && body.detail) || "加载知识库失败");
+            return body;
+          });
+        })
+        .then(function (body) {
+          var data = body.data || {};
+          if (Array.isArray(data.preset_questions) && data.preset_questions.length) {
+            state.presetQuestions = data.preset_questions;
+          }
+          state.handbookAvailable = data.handbook_available !== false;
+          renderSourceTags(data.sources || []);
+          renderPresetButtons();
+          var inp = root.querySelector("[data-field=\"q\"]");
+          if (inp && !inp.value && state.presetQuestions[0]) {
+            inp.value = state.presetQuestions[0];
+          }
+        })
+        .catch(function () {
+          renderSourceTags([]);
+          renderPresetButtons();
+        });
+    }
+
     bind(root, "[data-action=\"ask\"]", "click", function () {
       var inp = root.querySelector("[data-field=\"q\"]");
       var out = root.querySelector("[data-slot=\"out\"]");
+      var btn = root.querySelector("[data-action=\"ask\"]");
+      var lineEl = root.querySelector("[data-field=\"line\"]");
+      var token = localStorage.getItem("portal_token");
       var q = inp ? inp.value.trim() : "";
+      var knowledgeLine = lineEl ? lineEl.value : "";
+
       out.classList.remove("hidden");
-      out.innerHTML =
-        '<p class="mb-3 flex items-center gap-2 text-xs text-slate-500">' + spinHtml() + " 正在检索制度库…</p>";
-      setTimeout(function () {
-        out.innerHTML =
-          '<p class="font-medium text-slate-900">摘要回答</p>' +
-          '<p class="mt-2">根据《员工手册》<strong class="font-medium text-orange-600">第 3.2 节</strong>，年假需提前在 OA 提交申请，' +
-          "经直属主管审批；当年额度按司龄折算。以下引用片段可点击展开核对（模拟）。</p>" +
-          '<div class="mt-3 flex flex-wrap gap-2">' +
-          '<button type="button" class="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900 transition hover:bg-amber-100">引用 · 员工手册 3.2</button>' +
-          '<button type="button" class="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900 transition hover:bg-amber-100">引用 · OA 流程说明</button>' +
-          "</div>" +
-          '<p class="mt-3 text-xs text-slate-500">问题：' + escapeHtml(q || "（空）") + "</p>";
-      }, 700);
+      if (!q) {
+        out.innerHTML = '<p class="text-sm text-red-700">请输入问题或选择上方快捷问题。</p>';
+        return;
+      }
+      if (!token || !(product && product.id)) {
+        out.innerHTML = '<p class="text-sm text-red-700">未登录或缺少产品信息，无法调用问答接口。</p>';
+        return;
+      }
+      if (!state.handbookAvailable) {
+        out.innerHTML = '<p class="text-sm text-red-700">员工手册知识库文件不可用，请检查服务端 docs/员工手册.md 是否已部署。</p>';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 检索中";
+      out.innerHTML = '<p class="flex items-center gap-2 text-xs text-slate-500">' + spinHtml() + " 正在检索 docs/员工手册.md…</p>";
+
+      fetch(apiBase() + "/api/enterprise-gpt/ask", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product_id: product.id,
+          question: q,
+          knowledge_line: knowledgeLine
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (body) {
+            if (!res.ok) throw new Error((body && body.detail) || "检索失败");
+            return body;
+          });
+        })
+        .then(function (body) {
+          out.innerHTML = renderAnswer(body.data || {});
+        })
+        .catch(function (ex) {
+          out.innerHTML = '<p class="text-sm text-red-700">' + escapeHtml(ex.message || "检索失败，请稍后重试。") + "</p>";
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "检索问答";
+        });
     });
+
+    loadSources();
   }
 
   function demoCopilot(root) {
@@ -106,28 +287,269 @@
     });
   }
 
-  function demoCompliance(root) {
+  function demoCompliance(root, product) {
     root.innerHTML = shell("条款风险初筛", (
-      '<ul class="space-y-3 text-sm">' +
-      '<li class="rounded-xl border border-slate-200 bg-white p-3" data-clause="1">甲方可在<strong class="text-slate-900">不事先通知</strong>的情况下调整服务价格。</li>' +
-      '<li class="rounded-xl border border-slate-200 bg-white p-3" data-clause="2">乙方对因不可抗力造成的损失<strong class="text-slate-900">承担全部赔偿责任</strong>。</li>' +
-      '<li class="rounded-xl border border-slate-200 bg-white p-3" data-clause="3">争议提交<strong class="text-slate-900">甲方所在地</strong>法院专属管辖。</li>' +
-      "</ul>" +
-      '<button type="button" data-action="scan" class="mt-4 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-orange-600">' +
-      "运行模拟扫描" +
-      "</button>"
+      '<p class="text-sm leading-relaxed text-slate-600">' +
+      '对<strong class="text-slate-800">合同、采购与对外承诺</strong>类文档进行条款级扫描，' +
+      '提示偏离模板的表述与常见风险点。演示条款库来自 <code class="rounded bg-slate-100 px-1 text-xs">docs/compliance.md</code>，' +
+      '不替代律师结论，但可显著缩短初筛时间。' +
+      "</p>" +
+      '<div class="mt-4 flex flex-wrap gap-2 text-xs" data-slot="sources"></div>' +
+      '<div class="mt-4 grid gap-4 sm:grid-cols-2">' +
+      '<div><label class="text-xs font-medium text-slate-600">条款类别</label>' +
+      '<select data-field="category" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      "<option>合同</option>" +
+      "<option>采购</option>" +
+      "<option>对外承诺</option>" +
+      "</select></div>" +
+      '<div><label class="text-xs font-medium text-slate-600">扫描模式</label>' +
+      '<select data-field="mode" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      "<option>演示样例（3 条）</option>" +
+      "<option>自定义粘贴</option>" +
+      "</select></div></div>" +
+      '<div data-slot="samples" class="mt-4 space-y-3"></div>' +
+      '<div data-slot="custom" class="mt-4 hidden">' +
+      '<label class="text-xs font-medium text-slate-600">粘贴待扫描条款（每行一条）</label>' +
+      '<textarea data-field="custom-clauses" rows="5" class="mt-1 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed outline-none ring-orange-500/20 transition focus:border-orange-500 focus:ring-4"></textarea>' +
+      "</div>" +
+      '<button type="button" data-action="scan" class="mt-4 inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">' +
+      "运行条款扫描" +
+      "</button>" +
+      '<div data-slot="out" class="hidden rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm leading-relaxed text-slate-700"></div>' +
+      '<p data-slot="disclaimer" class="mt-3 text-xs leading-relaxed text-slate-500"></p>'
     ));
-    bind(root, "[data-action=\"scan\"]", "click", function () {
-      var items = root.querySelectorAll("[data-clause]");
-      items.forEach(function (li, i) {
-        var risks = ["偏离模板：单方调价权过宽", "权责不对等：不可抗力全赔", "管辖条款：需复核是否可接受"];
-        li.innerHTML =
-          li.textContent +
-          ' <span class="mt-2 inline-flex rounded-lg bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">' +
-          escapeHtml(risks[i]) +
-          "</span>";
-      });
+
+    function apiBase() {
+      if (!window.location.host) return "http://127.0.0.1";
+      return "";
+    }
+
+    var state = {
+      samples: [],
+      disclaimer: "本演示数据不构成法律意见，正式使用前须经法务及合规部门复核。"
+    };
+
+    function renderSourceTags(categories) {
+      var slot = root.querySelector("[data-slot=\"sources\"]");
+      if (!slot) return;
+      var list = Array.isArray(categories) ? categories : [];
+      if (!list.length) {
+        slot.innerHTML = '<span class="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600">条款库 · compliance.md</span>';
+        return;
+      }
+      slot.innerHTML = list.map(function (item) {
+        return (
+          '<span class="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600">' +
+          escapeHtml(item.label) + " · " + escapeHtml(String(item.risky_count)) + " 有风险 / " +
+          escapeHtml(String(item.safe_count)) + " 无风险" +
+          "</span>"
+        );
+      }).join("");
+    }
+
+    function renderSampleClauses() {
+      var slot = root.querySelector("[data-slot=\"samples\"]");
+      if (!slot) return;
+      if (!state.samples.length) {
+        slot.innerHTML = '<p class="text-xs text-slate-500">正在加载演示样例…</p>';
+        return;
+      }
+      slot.innerHTML = state.samples.map(function (item, index) {
+        return (
+          '<div class="rounded-xl border border-slate-200 bg-white p-3" data-sample-index="' + index + '">' +
+          '<p class="text-xs font-medium text-slate-500">' + escapeHtml(item.clause_id || ("样例-" + (index + 1))) +
+          " · " + escapeHtml(item.title || "待扫描条款") + "</p>" +
+          '<p class="mt-1 text-sm leading-relaxed text-slate-700">' + escapeHtml(item.text || "") + "</p>" +
+          "</div>"
+        );
+      }).join("");
+    }
+
+    function renderCitationPanel(label, body) {
+      return (
+        '<details class="mt-2 rounded-lg border border-amber-200 bg-amber-50/80">' +
+        '<summary class="cursor-pointer px-3 py-2 text-xs font-medium text-amber-900">' +
+        escapeHtml(label) +
+        "</summary>" +
+        '<pre class="whitespace-pre-wrap border-t border-amber-200/80 px-3 py-2 font-sans text-xs leading-relaxed text-amber-950">' +
+        escapeHtml(body) +
+        "</pre></details>"
+      );
+    }
+
+    function riskBadgeClass(level) {
+      if (level === "无风险") return "bg-emerald-50 text-emerald-700";
+      if (level === "待复核") return "bg-amber-50 text-amber-800";
+      return "bg-red-50 text-red-700";
+    }
+
+    function renderScanResults(data) {
+      var results = (data && data.results) || [];
+      var summary =
+        '<p class="font-medium text-slate-900">扫描摘要 · ' + escapeHtml(data.category || "") + "</p>" +
+        '<p class="mt-2 text-sm text-slate-600">有风险 ' + escapeHtml(String(data.risky_count || 0)) +
+        " 条 · 无风险 " + escapeHtml(String(data.safe_count || 0)) +
+        " 条 · 待复核 " + escapeHtml(String(data.review_count || 0)) + " 条</p>";
+
+      var items = results.map(function (item, index) {
+        var tags = Array.isArray(item.risk_tags) ? item.risk_tags : [];
+        var tagHtml = tags.map(function (tag) {
+          return '<span class="mr-1 inline-flex rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600">' +
+            escapeHtml(tag) + "</span>";
+        }).join("");
+        var citation = item.citation_title && item.citation_excerpt
+          ? renderCitationPanel(item.citation_title, item.citation_excerpt)
+          : "";
+        return (
+          '<div class="mt-3 rounded-xl border border-slate-200 bg-white p-3">' +
+          '<div class="flex flex-wrap items-center gap-2">' +
+          '<span class="text-xs font-medium text-slate-500">条款 ' + (index + 1) + "</span>" +
+          '<span class="inline-flex rounded-lg px-2 py-0.5 text-xs font-medium ' + riskBadgeClass(item.risk_level) + '">' +
+          escapeHtml(item.risk_level || "待复核") + "</span>" +
+          (item.matched_clause_id ? '<span class="text-xs text-slate-500">' + escapeHtml(item.matched_clause_id) + "</span>" : "") +
+          "</div>" +
+          '<p class="mt-2 text-sm leading-relaxed text-slate-700">' + escapeHtml(item.input_text || "") + "</p>" +
+          '<p class="mt-2 text-xs font-medium text-slate-600">' + escapeHtml(item.risk_summary || "") + "</p>" +
+          (tagHtml ? '<div class="mt-2">' + tagHtml + "</div>" : "") +
+          citation +
+          "</div>"
+        );
+      }).join("");
+
+      return summary + items +
+        '<p class="mt-4 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">' +
+        escapeHtml(data.disclaimer || state.disclaimer) +
+        "</p>";
+    }
+
+    function loadSources(category) {
+      var token = localStorage.getItem("portal_token");
+      var productId = product && product.id;
+      if (!token || !productId) {
+        renderSampleClauses();
+        return Promise.resolve();
+      }
+      var query = "?product_id=" + encodeURIComponent(productId) +
+        "&category=" + encodeURIComponent(category || "合同");
+      return fetch(apiBase() + "/api/compliance/sources" + query, {
+        headers: { "Authorization": "Bearer " + token }
+      })
+        .then(function (res) {
+          return res.json().then(function (body) {
+            if (!res.ok) throw new Error((body && body.detail) || "加载条款库失败");
+            return body;
+          });
+        })
+        .then(function (body) {
+          var data = body.data || {};
+          state.samples = data.preset_samples || [];
+          state.disclaimer = data.disclaimer || state.disclaimer;
+          renderSourceTags(data.categories || []);
+          renderSampleClauses();
+          var disclaimerEl = root.querySelector("[data-slot=\"disclaimer\"]");
+          if (disclaimerEl) disclaimerEl.textContent = state.disclaimer;
+        })
+        .catch(function () {
+          renderSourceTags([]);
+          state.samples = [
+            {
+              clause_id: "合同-001",
+              title: "单方调价权过宽",
+              text: "甲方可在不事先通知的情况下，根据市场情况单方面调整本协议项下全部服务价格，乙方不得以此为由拒绝继续履行或要求解除协议。"
+            },
+            {
+              clause_id: "合同-002",
+              title: "不可抗力责任不对等",
+              text: "因不可抗力导致本协议无法履行的，乙方对由此给甲方造成的全部直接及间接损失承担赔偿责任，甲方不承担任何补偿义务。"
+            },
+            {
+              clause_id: "合同-003",
+              title: "管辖条款单方指定",
+              text: "因本协议产生的任何争议，均应提交甲方注册地人民法院专属管辖，乙方放弃对管辖法院提出异议的权利。"
+            }
+          ];
+          renderSampleClauses();
+        });
+    }
+
+    function collectClauses() {
+      var modeEl = root.querySelector("[data-field=\"mode\"]");
+      var mode = modeEl ? modeEl.value : "演示样例（3 条）";
+      if (mode === "自定义粘贴") {
+        var textarea = root.querySelector("[data-field=\"custom-clauses\"]");
+        var raw = textarea ? textarea.value : "";
+        return raw.split(/\n+/).map(function (line) { return line.trim(); }).filter(Boolean);
+      }
+      return state.samples.map(function (item) { return item.text; }).filter(Boolean);
+    }
+
+    bind(root, "[data-field=\"category\"]", "change", function () {
+      var categoryEl = root.querySelector("[data-field=\"category\"]");
+      loadSources(categoryEl ? categoryEl.value : "合同");
     });
+
+    bind(root, "[data-field=\"mode\"]", "change", function () {
+      var modeEl = root.querySelector("[data-field=\"mode\"]");
+      var custom = root.querySelector("[data-slot=\"custom\"]");
+      var samples = root.querySelector("[data-slot=\"samples\"]");
+      var isCustom = modeEl && modeEl.value === "自定义粘贴";
+      if (custom) custom.classList.toggle("hidden", !isCustom);
+      if (samples) samples.classList.toggle("hidden", isCustom);
+    });
+
+    bind(root, "[data-action=\"scan\"]", "click", function () {
+      var out = root.querySelector("[data-slot=\"out\"]");
+      var btn = root.querySelector("[data-action=\"scan\"]");
+      var categoryEl = root.querySelector("[data-field=\"category\"]");
+      var token = localStorage.getItem("portal_token");
+      var clauses = collectClauses();
+      var category = categoryEl ? categoryEl.value : "合同";
+
+      out.classList.remove("hidden");
+      if (!clauses.length) {
+        out.innerHTML = '<p class="text-sm text-red-700">请先选择演示样例或粘贴待扫描条款。</p>';
+        return;
+      }
+      if (!token || !(product && product.id)) {
+        out.innerHTML = '<p class="text-sm text-red-700">未登录或缺少产品信息，无法调用扫描接口。</p>';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 扫描中";
+      out.innerHTML = '<p class="flex items-center gap-2 text-xs text-slate-500">' + spinHtml() + " 正在匹配 docs/compliance.md 条款库…</p>";
+
+      fetch(apiBase() + "/api/compliance/scan", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product_id: product.id,
+          category: category,
+          clauses: clauses
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (body) {
+            if (!res.ok) throw new Error((body && body.detail) || "扫描失败");
+            return body;
+          });
+        })
+        .then(function (body) {
+          out.innerHTML = renderScanResults(body.data || {});
+        })
+        .catch(function (ex) {
+          out.innerHTML = '<p class="text-sm text-red-700">' + escapeHtml(ex.message || "扫描失败，请稍后重试。") + "</p>";
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "运行条款扫描";
+        });
+    });
+
+    loadSources("合同");
   }
 
   function demoFinReport(root) {
@@ -709,23 +1131,182 @@
     });
   }
 
-  function demoDevopsLogs(root) {
+  function demoDevopsLogs(root, product) {
     root.innerHTML = shell("日志聚类与异常", (
-      '<div class="max-h-48 overflow-y-auto rounded-xl border border-slate-900 bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-300">' +
-      '<p data-log="1">2026-05-14T08:01:12Z ERROR payment-svc timeout upstream=db-primary</p>' +
-      '<p data-log="2">2026-05-14T08:01:13Z ERROR payment-svc timeout upstream=db-primary</p>' +
-      '<p data-log="3">2026-05-14T08:01:14Z WARN  cache-miss key=user:88421</p>' +
-      '<p data-log="4">2026-05-14T08:01:18Z ERROR payment-svc timeout upstream=db-primary</p>' +
+      '<div class="grid gap-4 sm:grid-cols-[1fr_1.1fr]">' +
+      '<div class="space-y-3">' +
+      '<p class="text-xs leading-relaxed text-slate-500">粘贴一段容器 / 中间件日志（每行一条），点击分析后将返回模板聚类与异常候选（演示级启发式）。</p>' +
+      '<label class="block text-xs font-medium text-slate-600">日志输入</label>' +
+      '<textarea data-field="logs" rows="9" class="w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-[12px] leading-relaxed outline-none ring-orange-500/20 transition focus:border-orange-500 focus:ring-4">' +
+      escapeHtml([
+        "2026-05-14T08:01:12Z ERROR payment-svc timeout upstream=db-primary",
+        "2026-05-14T08:01:13Z ERROR payment-svc timeout upstream=db-primary",
+        "2026-05-14T08:01:14Z WARN  cache-miss key=user:88421",
+        "2026-05-14T08:01:18Z ERROR payment-svc timeout upstream=db-primary",
+        "2026-05-14T08:02:03Z ERROR api-gw 502 upstream=inventory-svc req_id=3f0c1d9a-12ab-4cde-9f00-1a2b3c4d5e6f"
+      ].join("\n")) +
+      '</textarea>' +
+      '<div class="flex flex-wrap items-center gap-2">' +
+      '<button type="button" data-action="analyze" class="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">分析日志</button>' +
+      '<button type="button" data-action="fill" class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">填充样例</button>' +
       "</div>" +
-      '<button type="button" data-action="cluster" class="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">聚类分析（模拟）</button>'
+      "</div>" +
+      '<div class="space-y-3">' +
+      '<div data-slot="out" class="rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700">' +
+      '<p class="text-xs text-slate-500">点击“分析日志”查看聚类与异常结果。</p>' +
+      "</div>" +
+      "</div>" +
+      "</div>"
     ));
-    bind(root, "[data-action=\"cluster\"]", "click", function () {
-      [1, 2, 4].forEach(function (id) {
-        var p = root.querySelector("[data-log=\"" + id + "\"]");
-        if (p) {
-          p.className = "rounded bg-orange-950/50 text-orange-200";
-        }
-      });
+
+    function splitLines(text) {
+      return String(text || "")
+        .split(/\r?\n/)
+        .map(function (x) { return x.trim(); })
+        .filter(Boolean)
+        .slice(0, 2000);
+    }
+
+    function renderTokens(tokens) {
+      var list = Array.isArray(tokens) ? tokens : [];
+      if (!list.length) return "";
+      return '<div class="mt-2 flex flex-wrap gap-1.5">' + list.map(function (t) {
+        return '<span class="rounded-lg bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800">' + escapeHtml(t) + "</span>";
+      }).join("") + "</div>";
+    }
+
+    function renderClusters(clusters) {
+      var list = Array.isArray(clusters) ? clusters : [];
+      if (!list.length) {
+        return '<p class="text-sm text-slate-500">未形成聚类（可尝试降低最小聚类阈值或提供更多相似日志）。</p>';
+      }
+      return '<div class="space-y-3">' + list.map(function (c) {
+        var examples = Array.isArray(c.examples) ? c.examples : [];
+        return (
+          '<div class="rounded-xl border border-slate-200 bg-white p-3">' +
+          '<div class="flex items-start justify-between gap-2">' +
+          '<p class="text-xs font-semibold text-slate-500">模板</p>' +
+          '<span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">x' + escapeHtml(String(c.count || 0)) + "</span>" +
+          "</div>" +
+          '<p class="mt-1 font-mono text-[12px] leading-relaxed text-slate-900">' + escapeHtml(c.template || "") + "</p>" +
+          renderTokens(c.tokens) +
+          (examples.length
+            ? '<p class="mt-3 text-xs font-semibold text-slate-500">样例</p>' +
+              '<ul class="mt-1 list-disc space-y-1 pl-5 text-xs text-slate-600">' +
+              examples.slice(0, 3).map(function (x) { return "<li>" + escapeHtml(x) + "</li>"; }).join("") +
+              "</ul>"
+            : "") +
+          "</div>"
+        );
+      }).join("") + "</div>";
+    }
+
+    function scoreBadge(score) {
+      var s = Number(score);
+      if (!Number.isFinite(s)) s = 0;
+      if (s >= 60) return "border-red-200 bg-red-50 text-red-700";
+      if (s >= 30) return "border-amber-200 bg-amber-50 text-amber-800";
+      return "border-slate-200 bg-slate-50 text-slate-700";
+    }
+
+    function renderAnomalies(anomalies) {
+      var list = Array.isArray(anomalies) ? anomalies : [];
+      if (!list.length) {
+        return '<p class="text-sm text-slate-500">未发现异常候选（演示算法）。</p>';
+      }
+      return '<div class="space-y-3">' + list.map(function (a) {
+        return (
+          '<div class="rounded-xl border border-slate-200 bg-white p-3">' +
+          '<div class="flex flex-wrap items-center justify-between gap-2">' +
+          '<p class="text-xs font-semibold text-slate-500">异常候选</p>' +
+          '<span class="rounded-full border px-2.5 py-1 text-xs font-medium ' + scoreBadge(a.score) + '">' +
+          "score " + escapeHtml(String(a.score || 0)) + "</span>" +
+          "</div>" +
+          '<p class="mt-1 text-xs text-slate-600">' + escapeHtml(a.reason || "") + "</p>" +
+          '<p class="mt-2 font-mono text-[12px] leading-relaxed text-slate-900">' + escapeHtml(a.log || "") + "</p>" +
+          '<details class="mt-2">' +
+          '<summary class="cursor-pointer text-xs text-slate-500 hover:text-slate-700">查看模板</summary>' +
+          '<p class="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-[11px] text-slate-700">' + escapeHtml(a.template || "") + "</p>" +
+          "</details>" +
+          "</div>"
+        );
+      }).join("") + "</div>";
+    }
+
+    bind(root, "[data-action=\"fill\"]", "click", function () {
+      var ta = root.querySelector("[data-field=\"logs\"]");
+      if (!ta) return;
+      ta.value = [
+        "2026-05-14T08:01:12Z ERROR payment-svc timeout upstream=db-primary",
+        "2026-05-14T08:01:13Z ERROR payment-svc timeout upstream=db-primary",
+        "2026-05-14T08:01:14Z WARN  cache-miss key=user:88421",
+        "2026-05-14T08:01:18Z ERROR payment-svc timeout upstream=db-primary",
+        "2026-05-14T08:02:03Z ERROR api-gw 502 upstream=inventory-svc req_id=3f0c1d9a-12ab-4cde-9f00-1a2b3c4d5e6f",
+        "2026-05-14T08:02:04Z ERROR inventory-svc connection refused host=10.0.0.8:5432"
+      ].join("\n");
+    });
+
+    bind(root, "[data-action=\"analyze\"]", "click", function () {
+      var ta = root.querySelector("[data-field=\"logs\"]");
+      var out = root.querySelector("[data-slot=\"out\"]");
+      var btn = root.querySelector("[data-action=\"analyze\"]");
+      var token = localStorage.getItem("portal_token");
+      if (!ta || !out || !btn) return;
+      var logs = splitLines(ta.value);
+      if (!logs.length) {
+        out.className = "rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm text-red-700";
+        out.textContent = "请先输入日志（每行一条）。";
+        return;
+      }
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 分析中";
+      out.className = "rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700";
+      out.innerHTML = '<p class="flex items-center gap-2 text-sm text-slate-600">' + spinHtml() + " 正在调用后端接口进行聚类与异常检测…</p>";
+
+      fetch(apiBase() + "/api/log-insight/analyze", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product_id: product && product.id,
+          logs: logs,
+          top_k: 8,
+          anomaly_k: 6,
+          min_cluster_size: 2
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error((data && data.detail) || "分析失败");
+            return data;
+          });
+        })
+        .then(function (body) {
+          var data = (body && body.data) || {};
+          out.className = "rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700";
+          out.innerHTML =
+            '<div class="flex flex-wrap items-center justify-between gap-2">' +
+            '<p class="text-sm font-medium text-slate-900">分析结果</p>' +
+            '<p class="text-xs text-slate-500">总日志 ' + escapeHtml(String(data.total || 0)) +
+            " · 解析 " + escapeHtml(String(data.parsed || 0)) + "</p>" +
+            "</div>" +
+            '<div class="mt-4 grid gap-4">' +
+            '<div><p class="text-xs font-semibold text-slate-500">聚类（Top）</p>' +
+            '<div class="mt-2">' + renderClusters(data.clusters) + "</div></div>" +
+            '<div><p class="text-xs font-semibold text-slate-500">异常候选</p>' +
+            '<div class="mt-2">' + renderAnomalies(data.anomalies) + "</div></div>" +
+            "</div>";
+        })
+        .catch(function (ex) {
+          out.className = "rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm leading-relaxed text-red-700";
+          out.textContent = ex.message || "分析失败，请稍后重试。";
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "分析日志";
+        });
     });
   }
 
@@ -894,27 +1475,271 @@
     };
   }
 
-  function demoAdminRouter(root) {
-    root.innerHTML = shell("密钥与路由（模拟）", (
-      '<table class="w-full text-left text-xs">' +
-      "<thead><tr class=\"border-b border-slate-200 text-slate-500\">" +
-      "<th class=\"py-2\">应用</th><th class=\"py-2\">路由策略</th><th class=\"py-2\">状态</th></tr></thead><tbody>" +
-      '<tr class="border-b border-slate-100"><td class="py-2 font-medium">客服机器人</td><td class="py-2">gpt-4.1-mini · 华东</td>' +
-      '<td class="py-2"><button type="button" data-toggle="1" class="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">启用</button></td></tr>' +
-      '<tr class="border-b border-slate-100"><td class="py-2 font-medium">内部 RAG</td><td class="py-2">私有模型 · VPC</td>' +
-      '<td class="py-2"><button type="button" data-toggle="2" class="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">启用</button></td></tr>' +
-      "</tbody></table>" +
-      '<p class="mt-3 text-xs text-slate-500">API Key：<span class="font-mono">sk-••••••••8f2a</span>（脱敏模拟）</p>'
+  function demoAdminRouter(root, product) {
+    root.innerHTML = shell("密钥与模型路由治理", (
+      '<div class="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">' +
+      '<section class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<div class="flex flex-wrap items-center justify-between gap-2">' +
+      '<h3 class="text-sm font-semibold text-slate-900">路由演练</h3>' +
+      '<span class="rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-600">仅管理员</span>' +
+      "</div>" +
+      '<div class="mt-4 grid gap-3 sm:grid-cols-2">' +
+      '<label class="text-xs font-medium text-slate-600">应用模块' +
+      '<select data-field="application" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      '<option value="customer-service">客服话术优化</option>' +
+      '<option value="internal-rag">企业 GPT 助手</option>' +
+      '<option value="office-review">智能办公智能体</option>' +
+      '<option value="training-coach">员工自助：培训陪练</option>' +
+      "</select></label>" +
+      '<label class="text-xs font-medium text-slate-600">风险等级' +
+      '<select data-field="risk" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      '<option value="medium">中风险</option><option value="low">低风险</option><option value="high">高风险</option>' +
+      "</select></label>" +
+      '<label class="text-xs font-medium text-slate-600">输入 Token' +
+      '<input data-field="tokens" type="number" min="100" max="50000" value="2400" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />' +
+      "</label>" +
+      '<label class="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600">' +
+      '<input data-field="sensitive" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-orange-500 focus:ring-orange-500" />' +
+      "包含敏感数据标记" +
+      "</label></div>" +
+      '<button type="button" data-action="simulate" class="mt-4 inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">运行路由演练</button>' +
+      '<div data-slot="simulation" class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">等待管理员发起演练。</div>' +
+      "</section>" +
+      '<section class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<div class="flex flex-wrap items-center justify-between gap-2">' +
+      '<h3 class="text-sm font-semibold text-slate-900">密钥轮换</h3>' +
+      '<button type="button" data-action="refresh" class="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:border-orange-300 hover:text-orange-700">刷新</button>' +
+      "</div>" +
+      '<label class="mt-4 block text-xs font-medium text-slate-600">密钥标识' +
+      '<select data-field="key" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"></select></label>' +
+      '<label class="mt-3 block text-xs font-medium text-slate-600">轮换原因' +
+      '<input data-field="reason" value="定期轮换演练" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />' +
+      "</label>" +
+      '<button type="button" data-action="rotate" class="mt-4 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-orange-300 hover:text-orange-700 disabled:cursor-not-allowed disabled:text-slate-400">模拟轮换</button>' +
+      '<div data-slot="rotation" class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">未执行轮换演练。</div>' +
+      "</section></div>" +
+      '<div class="mt-4 grid gap-4 lg:grid-cols-[1fr_0.9fr]">' +
+      '<section class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<h3 class="text-sm font-semibold text-slate-900">路由策略</h3>' +
+      '<div data-slot="routes" class="mt-3 overflow-x-auto text-xs text-slate-600">加载中…</div>' +
+      "</section>" +
+      '<section class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<h3 class="text-sm font-semibold text-slate-900">密钥台账</h3>' +
+      '<div data-slot="keys" class="mt-3 space-y-2 text-xs text-slate-600">加载中…</div>' +
+      "</section></div>" +
+      '<div class="mt-4 grid gap-4 lg:grid-cols-2">' +
+      '<section class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<h3 class="text-sm font-semibold text-slate-900">治理告警</h3>' +
+      '<div data-slot="warnings" class="mt-3 space-y-2 text-xs text-slate-600">加载中…</div>' +
+      "</section>" +
+      '<section class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<h3 class="text-sm font-semibold text-slate-900">审计日志</h3>' +
+      '<div data-slot="audit" class="mt-3 space-y-2 text-xs text-slate-600">加载中…</div>' +
+      "</section></div>" +
+      '<p data-slot="disclaimer" class="mt-3 text-xs leading-relaxed text-slate-500"></p>'
     ));
-    root.querySelectorAll("[data-toggle]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var on = btn.textContent === "启用";
-        btn.textContent = on ? "熔断" : "启用";
-        btn.className = on
-          ? "rounded-full bg-red-100 px-2 py-0.5 text-red-800"
-          : "rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800";
+
+    var state = { keys: [] };
+
+    function jsonResponse(res) {
+      return res.text().then(function (text) {
+        var body = {};
+        if (text) {
+          try {
+            body = JSON.parse(text);
+          } catch (e) {
+            body = { detail: text };
+          }
+        }
+        if (!res.ok) throw new Error((body && (body.detail || body.message)) || "请求失败");
+        return body;
       });
+    }
+
+    function requireAdminContext(out) {
+      var token = localStorage.getItem("portal_token");
+      if (!token || !(product && product.id)) {
+        out.innerHTML = '<p class="text-sm text-red-700">未登录或缺少产品信息，无法访问管理员模块。</p>';
+        return null;
+      }
+      return token;
+    }
+
+    function statusClass(statusText) {
+      if (statusText === "健康" || statusText === "启用") return "bg-emerald-50 text-emerald-700";
+      if (statusText === "观察") return "bg-amber-50 text-amber-800";
+      return "bg-slate-100 text-slate-600";
+    }
+
+    function renderRoutes(routes) {
+      var rows = (routes || []).map(function (route) {
+        return (
+          '<tr class="border-b border-slate-100 last:border-0">' +
+          '<td class="py-2 pr-3 font-medium text-slate-800">' + escapeHtml(route.application_label) + '</td>' +
+          '<td class="py-2 pr-3">' + escapeHtml(route.primary_model) + '<br><span class="text-slate-400">兜底：' + escapeHtml(route.fallback_model) + '</span></td>' +
+          '<td class="py-2 pr-3">' + escapeHtml(route.policy) + '</td>' +
+          '<td class="py-2"><span class="rounded-lg px-2 py-0.5 ' + statusClass(route.status) + '">' + escapeHtml(route.status) + '</span></td>' +
+          "</tr>"
+        );
+      }).join("");
+      root.querySelector("[data-slot=\"routes\"]").innerHTML =
+        '<table class="min-w-full text-left"><thead><tr class="border-b border-slate-200 text-slate-400">' +
+        '<th class="py-2 pr-3">应用</th><th class="py-2 pr-3">模型</th><th class="py-2 pr-3">策略</th><th class="py-2">状态</th>' +
+        "</tr></thead><tbody>" + rows + "</tbody></table>";
+    }
+
+    function renderKeys(keys) {
+      state.keys = keys || [];
+      var select = root.querySelector("[data-field=\"key\"]");
+      select.innerHTML = state.keys.map(function (key) {
+        return '<option value="' + escapeHtml(key.key_id) + '">' + escapeHtml(key.key_id) + '</option>';
+      }).join("");
+      root.querySelector("[data-slot=\"keys\"]").innerHTML = state.keys.map(function (key) {
+        return (
+          '<div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">' +
+          '<div class="flex flex-wrap items-center justify-between gap-2">' +
+          '<span class="font-mono text-slate-800">' + escapeHtml(key.masked_key) + '</span>' +
+          '<span class="rounded-lg px-2 py-0.5 ' + statusClass(key.status) + '">' + escapeHtml(key.status) + '</span>' +
+          "</div>" +
+          '<p class="mt-1 text-slate-500">' + escapeHtml(key.provider) + ' · 负责人：' + escapeHtml(key.owner) + '</p>' +
+          '<p class="mt-1 text-slate-500">配额 ' + escapeHtml(String(key.used_pct)) + '% · 距轮换 ' + escapeHtml(String(key.rotation_days)) + ' 天</p>' +
+          "</div>"
+        );
+      }).join("");
+    }
+
+    function renderWarnings(warnings) {
+      var list = warnings || [];
+      root.querySelector("[data-slot=\"warnings\"]").innerHTML = list.length
+        ? list.map(function (item) {
+          return '<p class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">' + escapeHtml(item) + '</p>';
+        }).join("")
+        : '<p class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-800">当前没有演示告警。</p>';
+    }
+
+    function renderAudit(events) {
+      root.querySelector("[data-slot=\"audit\"]").innerHTML = (events || []).map(function (event) {
+        return (
+          '<div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">' +
+          '<p class="font-medium text-slate-800">' + escapeHtml(event.action) + ' · ' + escapeHtml(event.target) + '</p>' +
+          '<p class="mt-1 text-slate-500">' + escapeHtml(event.time) + ' · ' + escapeHtml(event.actor) + ' · ' + escapeHtml(event.result) + '</p>' +
+          "</div>"
+        );
+      }).join("");
+    }
+
+    function renderSimulation(data) {
+      var guardrails = (data.guardrails || []).map(function (item) {
+        return '<li>' + escapeHtml(item) + '</li>';
+      }).join("");
+      root.querySelector("[data-slot=\"simulation\"]").innerHTML =
+        '<div class="flex flex-wrap items-start justify-between gap-3">' +
+        '<div><p class="font-medium text-slate-900">' + escapeHtml(data.application_label) + '</p>' +
+        '<p class="mt-1 text-slate-600">' + escapeHtml(data.decision) + '</p></div>' +
+        '<span class="rounded-lg bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700">' + escapeHtml(data.throttle) + '</span>' +
+        "</div>" +
+        '<dl class="mt-3 grid gap-2 text-xs sm:grid-cols-2">' +
+        '<div><dt class="text-slate-400">选中模型</dt><dd class="font-medium text-slate-800">' + escapeHtml(data.selected_model) + '</dd></div>' +
+        '<div><dt class="text-slate-400">密钥标识</dt><dd class="font-mono text-slate-800">' + escapeHtml(data.masked_key) + '</dd></div>' +
+        '<div><dt class="text-slate-400">估算成本</dt><dd class="font-medium text-slate-800">' + escapeHtml(data.estimated_cost) + '</dd></div>' +
+        '<div><dt class="text-slate-400">估算时延</dt><dd class="font-medium text-slate-800">' + escapeHtml(String(data.estimated_latency_ms)) + ' ms</dd></div>' +
+        "</dl>" +
+        '<ul class="mt-3 list-disc space-y-1 pl-5 text-xs text-slate-600">' + guardrails + '</ul>' +
+        '<p class="mt-3 text-xs text-slate-400">' + escapeHtml(data.disclaimer || "") + '</p>';
+    }
+
+    function loadStatus() {
+      var routesSlot = root.querySelector("[data-slot=\"routes\"]");
+      var token = requireAdminContext(routesSlot);
+      if (!token) return Promise.resolve();
+      return fetch(apiBase() + "/api/admin-router/status?product_id=" + encodeURIComponent(product.id), {
+        headers: authHeaders()
+      })
+        .then(jsonResponse)
+        .then(function (body) {
+          var data = body.data || {};
+          renderRoutes(data.routes || []);
+          renderKeys(data.keys || []);
+          renderWarnings(data.warnings || []);
+          renderAudit(data.audit_events || []);
+          root.querySelector("[data-slot=\"disclaimer\"]").textContent = data.disclaimer || "";
+        })
+        .catch(function (ex) {
+          var html = '<p class="text-sm text-red-700">' + escapeHtml(ex.message || "加载管理员模块失败") + '</p>';
+          root.querySelector("[data-slot=\"routes\"]").innerHTML = html;
+          root.querySelector("[data-slot=\"keys\"]").innerHTML = html;
+          root.querySelector("[data-slot=\"warnings\"]").innerHTML = html;
+          root.querySelector("[data-slot=\"audit\"]").innerHTML = html;
+        });
+    }
+
+    bind(root, "[data-action=\"simulate\"]", "click", function () {
+      var out = root.querySelector("[data-slot=\"simulation\"]");
+      var token = requireAdminContext(out);
+      var btn = root.querySelector("[data-action=\"simulate\"]");
+      if (!token) return;
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 演练中";
+      out.innerHTML = '<p class="flex items-center gap-2 text-xs text-slate-500">' + spinHtml() + " 正在执行路由策略…</p>";
+      fetch(apiBase() + "/api/admin-router/simulate", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          product_id: product.id,
+          application: root.querySelector("[data-field=\"application\"]").value,
+          risk_level: root.querySelector("[data-field=\"risk\"]").value,
+          input_tokens: Number(root.querySelector("[data-field=\"tokens\"]").value || 2400),
+          contains_sensitive_data: root.querySelector("[data-field=\"sensitive\"]").checked
+        })
+      })
+        .then(jsonResponse)
+        .then(function (body) { renderSimulation(body.data || {}); })
+        .catch(function (ex) {
+          out.innerHTML = '<p class="text-sm text-red-700">' + escapeHtml(ex.message || "路由演练失败") + '</p>';
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "运行路由演练";
+        });
     });
+
+    bind(root, "[data-action=\"rotate\"]", "click", function () {
+      var out = root.querySelector("[data-slot=\"rotation\"]");
+      var token = requireAdminContext(out);
+      var btn = root.querySelector("[data-action=\"rotate\"]");
+      if (!token) return;
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 轮换中";
+      fetch(apiBase() + "/api/admin-router/rotate", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          product_id: product.id,
+          key_id: root.querySelector("[data-field=\"key\"]").value,
+          reason: root.querySelector("[data-field=\"reason\"]").value || "定期轮换演练"
+        })
+      })
+        .then(jsonResponse)
+        .then(function (body) {
+          var data = body.data || {};
+          out.innerHTML =
+            '<p class="font-medium text-slate-900">' + escapeHtml(data.status || "轮换演练已记录") + '</p>' +
+            '<p class="mt-2 text-xs text-slate-600">轮换编号：<span class="font-mono">' + escapeHtml(data.rotation_id || "") + '</span></p>' +
+            '<p class="mt-1 text-xs text-slate-600">密钥标识：<span class="font-mono">' + escapeHtml(data.masked_key || "") + '</span></p>' +
+            '<p class="mt-1 text-xs text-slate-600">下次轮换：' + escapeHtml(data.next_rotation_at || "") + '</p>' +
+            '<p class="mt-3 text-xs text-slate-400">' + escapeHtml(data.disclaimer || "") + '</p>';
+        })
+        .catch(function (ex) {
+          out.innerHTML = '<p class="text-sm text-red-700">' + escapeHtml(ex.message || "轮换演练失败") + '</p>';
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "模拟轮换";
+        });
+    });
+
+    bind(root, "[data-action=\"refresh\"]", "click", loadStatus);
+    loadStatus();
   }
 
   function demoDirectorSandbox(root) {
@@ -953,27 +1778,301 @@
     recalc();
   }
 
-  function demoTrainBot(root) {
-    root.innerHTML = shell("销售陪练回合", (
-      '<div data-slot="chat" class="max-h-52 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">' +
-      '<p class="rounded-lg bg-white p-2 text-slate-700"><span class="text-xs text-slate-400">客户 · </span>你们比竞品贵 15%，凭什么？</p></div>' +
-      '<div class="mt-2 flex gap-2">' +
-      '<input type="text" data-field="reply" placeholder="输入你的回应…" ' +
-      'class="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm" />' +
-      '<button type="button" data-action="send" class="rounded-xl bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600">发送</button></div>' +
-      '<p data-slot="score" class="mt-2 hidden text-xs text-slate-600"></p>'
+  function demoTrainBot(root, product) {
+    var SCENARIOS = [
+      {
+        id: "price",
+        label: "价格异议",
+        opening: "你们比竞品贵 15%，凭什么？如果只能讲概念，我很难往下推进。",
+        placeholder: "例如：我们先用 PoC 和合同指标验证效果",
+        localGood: "先认同客户对预算的敏感，再讲清 ROI 与服务差异，并给出可验证的下一步，避免直接降价。",
+        localDefault: "建议先共情再陈述价值锚点，可补充案例、SLA 或风险共担条款，避免陷入单纯比价。",
+        dims: [
+          { name: "共情", keys: ["理解", "明白", "感受", "确实", "抱歉"] },
+          { name: "价值陈述", keys: ["价值", "roi", "回报", "服务", "质量", "案例", "sla", "保障", "差异"] },
+          { name: "下一步承诺", keys: ["方案", "演示", "安排", "约", "下一步", "确认", "试用", "poc"] }
+        ]
+      },
+      {
+        id: "compliance",
+        label: "合规返点",
+        opening: "能不能私下给我返点？大家都这么操作。你能不能灵活一点？",
+        placeholder: "例如：返点不能私下承诺，我们按正式商务流程给您方案",
+        localGood: "拒绝明确、语气平稳，并引用制度说明正规渠道；可主动介绍合规替代方案，避免含糊或口头承诺。",
+        localDefault: "需明确拒绝私下返点，引用公司制度与审批流程，并引导客户走正规商务路径。",
+        dims: [
+          { name: "拒绝明确", keys: ["不能", "无法", "不可以", "不行", "违规", "不允许"] },
+          { name: "引用制度", keys: ["制度", "规定", "流程", "审批", "合规", "书面", "合同"] },
+          { name: "合规引导", keys: ["正规", "渠道", "替代", "介绍", "说明", "官方"] }
+        ]
+      },
+      {
+        id: "complaint",
+        label: "配送投诉",
+        opening: "等了一周还没送到，必须给我说法！你们到底能不能解决？",
+        placeholder: "例如：抱歉让您久等，我马上核实物流并今天回访",
+        localGood: "先安抚情绪并致歉，再说明核查动作与时效承诺，给出明确回访方式，避免空泛推诿。",
+        localDefault: "建议先表达理解与歉意，承诺具体核查时限，并告知后续联系渠道，避免使用推诿表述。",
+        dims: [
+          { name: "共情", keys: ["理解", "抱歉", "不好意思", "感受", "等待", "着急"] },
+          { name: "处理动作", keys: ["查", "核实", "跟进", "处理", "补偿", "时效", "今天", "立即"] },
+          { name: "回访承诺", keys: ["回访", "联系", "确认", "电话", "短信", "小时", "内"] }
+        ]
+      }
+    ];
+    var history = [];
+    var round = 0;
+
+    root.innerHTML = shell("合规陪练舱", (
+      '<div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 mb-4">' +
+      "输入 <code class=\"rounded bg-white/70 px-1\">/end</code> 可结束演练并生成教练复盘。对话通过后端接口返回，便于统一权限与后续模型接入。" +
+      "</div>" +
+      '<div class="mb-3 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">' +
+      '<label class="text-xs font-medium text-slate-600">陪练场景' +
+      '<select data-field="scenario" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">' +
+      SCENARIOS.map(function (scenario) {
+        return '<option value="' + escapeHtml(scenario.id) + '">' + escapeHtml(scenario.label) + "</option>";
+      }).join("") +
+      "</select></label>" +
+      '<button type="button" data-action="reset" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">重来</button>' +
+      "</div>" +
+      '<div data-slot="chat" class="max-h-80 space-y-3 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"></div>' +
+      '<div class="mt-3 flex flex-col gap-2 sm:flex-row">' +
+      '<input type="text" data-field="reply" placeholder="输入你的回应…例如：我们先用 PoC 和合同指标验证效果" ' +
+      'class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-orange-500/20 transition focus:border-orange-500 focus:ring-4" />' +
+      '<button type="button" data-action="send" class="rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">发送</button>' +
+      '<button type="button" data-action="end" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">结束</button>' +
+      "</div>" +
+      '<p data-slot="status" class="mt-2 hidden text-xs text-slate-500"></p>' +
+      '<p data-slot="score" class="mt-2 hidden rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-600"></p>' +
+      '<div data-slot="coach" class="mt-3 hidden rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm leading-relaxed text-slate-700"></div>'
     ));
+
+    var chat = root.querySelector("[data-slot=\"chat\"]");
+    var input = root.querySelector("[data-field=\"reply\"]");
+    var send = root.querySelector("[data-action=\"send\"]");
+    var end = root.querySelector("[data-action=\"end\"]");
+    var reset = root.querySelector("[data-action=\"reset\"]");
+    var scenarioSelect = root.querySelector("[data-field=\"scenario\"]");
+    var coach = root.querySelector("[data-slot=\"coach\"]");
+    var scoreLine = root.querySelector("[data-slot=\"score\"]");
+    var statusLine = root.querySelector("[data-slot=\"status\"]");
+    var sessionId = newSessionId();
+    var locked = false;
+
+    function newSessionId() {
+      return "training-" + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now()));
+    }
+
+    function getScenario() {
+      var id = scenarioSelect ? scenarioSelect.value : SCENARIOS[0].id;
+      for (var i = 0; i < SCENARIOS.length; i++) {
+        if (SCENARIOS[i].id === id) return SCENARIOS[i];
+      }
+      return SCENARIOS[0];
+    }
+
+    function hitDim(reply, dim) {
+      var text = String(reply || "").toLowerCase();
+      for (var i = 0; i < dim.keys.length; i++) {
+        if (text.indexOf(String(dim.keys[i]).toLowerCase()) >= 0) return true;
+      }
+      return false;
+    }
+
+    function localFeedback(scenario, reply) {
+      var hits = 0;
+      var parts = [];
+      for (var i = 0; i < scenario.dims.length; i++) {
+        var dim = scenario.dims[i];
+        var ok = hitDim(reply, dim);
+        if (ok) hits += 1;
+        parts.push(dim.name + " " + (ok ? "OK" : "待补"));
+      }
+      var grade = hits >= scenario.dims.length ? "A" : hits >= 2 ? "B" : "C";
+      return {
+        grade: grade,
+        text: "本轮要点命中：" + parts.join(" / ") + "；综合 " + grade + "。教练提示：" +
+          (hits >= 2 ? scenario.localGood : scenario.localDefault)
+      };
+    }
+
+    function append(role, text) {
+      var label = role === "user" ? "我" : role === "coach" ? "教练" : "李总";
+      var cls = role === "user" ? "bg-orange-50 text-slate-800" : role === "coach" ? "bg-emerald-50 text-slate-800" : "bg-white text-slate-700";
+      var align = role === "user" ? "ml-auto" : "";
+      chat.insertAdjacentHTML(
+        "beforeend",
+        '<p class="' + align + " max-w-[86%] rounded-lg p-2 shadow-sm " + cls + '">' +
+        '<span class="text-xs text-slate-400">' + label + " · </span>" +
+        escapeHtml(text).replace(/\n/g, "<br/>") +
+        "</p>"
+      );
+      chat.scrollTop = chat.scrollHeight;
+      history.push({ role: role === "user" ? "user" : "assistant", content: text });
+    }
+
+    function setBusy(busy) {
+      input.disabled = busy;
+      send.disabled = busy;
+      end.disabled = busy;
+      reset.disabled = busy;
+      scenarioSelect.disabled = busy;
+      send.textContent = busy ? "生成中…" : "发送";
+    }
+
+    function setStatus(text) {
+      if (!statusLine) return;
+      statusLine.textContent = text || "";
+      statusLine.classList.toggle("hidden", !text);
+    }
+
+    function showCoach(data) {
+      locked = true;
+      coach.classList.remove("hidden");
+      coach.innerHTML =
+        '<p class="mb-1 text-xs font-semibold text-emerald-700">AI 教练复盘</p>' +
+        '<div>' + escapeHtml(data.reply).replace(/\n/g, "<br/>") + "</div>";
+      input.disabled = true;
+      send.disabled = true;
+      end.disabled = true;
+      send.textContent = "已结束";
+      end.textContent = "已结束";
+    }
+
+    function showLocalScore(reply) {
+      var feedback = localFeedback(getScenario(), reply);
+      scoreLine.classList.remove("hidden");
+      scoreLine.textContent = feedback.text;
+    }
+
+    function resetRound() {
+      var scenario = getScenario();
+      history = [];
+      round = 0;
+      locked = false;
+      sessionId = newSessionId();
+      chat.innerHTML = "";
+      coach.classList.add("hidden");
+      coach.innerHTML = "";
+      scoreLine.classList.add("hidden");
+      scoreLine.textContent = "";
+      setStatus("");
+      input.disabled = false;
+      send.disabled = false;
+      end.disabled = false;
+      reset.disabled = false;
+      scenarioSelect.disabled = false;
+      send.textContent = "发送";
+      end.textContent = "结束";
+      input.value = "";
+      input.placeholder = "输入你的回应…例如：" + scenario.placeholder.replace(/^例如：/, "");
+      append("assistant", scenario.opening);
+    }
+
+    function handleStreamEvent(block) {
+      var eventName = "message";
+      var dataText = "";
+      block.split(/\n/).forEach(function (line) {
+        if (line.indexOf("event:") === 0) eventName = line.slice(6).trim();
+        if (line.indexOf("data:") === 0) dataText += line.slice(5).trim();
+      });
+      if (!dataText) return;
+      var payload = JSON.parse(dataText);
+      if (eventName === "status") {
+        setStatus(payload.message || "正在请求 DeepSeek…");
+        return;
+      }
+      if (eventName === "error") {
+        throw new Error(payload.message || "陪练接口调用失败");
+      }
+      if (eventName !== "result") return;
+      var data = payload && payload.data;
+      if (!data) throw new Error("陪练响应为空");
+      setStatus("");
+      if (data.phase === "report") {
+        append("coach", data.reply);
+        showCoach(data);
+      } else {
+        append("assistant", data.reply);
+      }
+    }
+
+    function readEventStream(response) {
+      if (!response.ok) {
+        return response.json().then(function (data) {
+          throw new Error((data && data.detail) || "陪练接口调用失败");
+        });
+      }
+      if (!response.body || !window.TextDecoder) {
+        return response.json().then(function (payload) {
+          handleStreamEvent("event: result\ndata: " + JSON.stringify(payload));
+        });
+      }
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder("utf-8");
+      var buffer = "";
+      function pump() {
+        return reader.read().then(function (result) {
+          buffer += decoder.decode(result.value || new Uint8Array(), { stream: !result.done });
+          var parts = buffer.split(/\n\n/);
+          buffer = parts.pop() || "";
+          parts.forEach(handleStreamEvent);
+          if (result.done) {
+            if (buffer.trim()) handleStreamEvent(buffer);
+            return;
+          }
+          return pump();
+        });
+      }
+      return pump();
+    }
+
+    function sendMessage(text) {
+      var value = text.trim();
+      if (!value || send.disabled) return;
+      round += 1;
+      append("user", value);
+      if (value !== "/end") showLocalScore(value);
+      input.value = "";
+      locked = false;
+      setBusy(true);
+      setStatus("正在连接 DeepSeek…");
+      fetch(apiBase() + "/api/employee-training/respond/stream", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          product_id: product && product.id,
+          user_message: value,
+          round: round,
+          session_id: sessionId,
+          history: history.slice(-12)
+        })
+      })
+        .then(readEventStream)
+        .catch(function (ex) {
+          setStatus("");
+          append("coach", "接口暂不可用：" + (ex.message || "未知错误") + "。请确认已通过 Docker 服务地址访问并已登录。");
+        })
+        .finally(function () {
+          if (!locked) setBusy(false);
+        });
+    }
+
+    resetRound();
+    bind(root, "[data-field=\"scenario\"]", "change", resetRound);
+    bind(root, "[data-action=\"reset\"]", "click", resetRound);
     bind(root, "[data-action=\"send\"]", "click", function () {
-      var chat = root.querySelector("[data-slot=\"chat\"]");
-      var inp = root.querySelector("[data-field=\"reply\"]");
-      var v = inp.value.trim() || "（未输入，使用默认回应）";
-      chat.innerHTML +=
-        '<p class="rounded-lg bg-orange-50 p-2 text-slate-800"><span class="text-xs text-orange-600">坐席 · </span>' + escapeHtml(v) + "</p>" +
-        '<p class="rounded-lg bg-white p-2 text-slate-700"><span class="text-xs text-slate-400">教练 · </span>可补充价值锚点与风险共担条款，避免单纯降价（模拟）。</p>';
-      inp.value = "";
-      var sc = root.querySelector("[data-slot=\"score\"]");
-      sc.classList.remove("hidden");
-      sc.textContent = "本轮要点命中：共情 ✓  价值陈述 △  下一步承诺 ✓（模拟评分）";
+      sendMessage(input.value);
+    });
+    bind(root, "[data-action=\"end\"]", "click", function () {
+      sendMessage("/end");
+    });
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        sendMessage(input.value);
+      }
     });
   }
 
@@ -1072,34 +2171,16 @@
     });
   }
 
-  function demoSmartOffice(root) {
-    root.innerHTML = shell("多流程文档审查", (
-      '<div class="flex flex-wrap gap-2 border-b border-slate-100 pb-3">' +
-      ["报销单据", "简历筛选", "招标文件", "合同审核"].map(function (t, i) {
-        return (
-          '<button type="button" data-tab="' + i + '" class="rounded-full px-3 py-1 text-xs font-medium ' +
-          (i === 0 ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200") + '">' +
-          escapeHtml(t) + "</button>"
-        );
-      }).join("") +
-      "</div>" +
-      '<div data-panel="0" class="mt-3 text-sm text-slate-700">差旅餐费超标 12%，缺少招待对象说明（模拟规则命中）。</div>' +
-      '<div data-panel="1" class="mt-3 hidden text-sm text-slate-700">简历与 JD 匹配度 76%：后端经验充分，行业经验偏弱（模拟）。</div>' +
-      '<div data-panel="2" class="mt-3 hidden text-sm text-slate-700">与历史中标方案相似度 18%，未发现明显串标片段（模拟）。</div>' +
-      '<div data-panel="3" class="mt-3 hidden text-sm text-slate-700">责任上限条款与模板不一致，建议法务复核（模拟）。</div>'
+  function demoSmartOffice(root, product) {
+    var href = "smart-office.html";
+    if (product && product.id) {
+      href += "?id=" + encodeURIComponent(String(product.id));
+    }
+    root.innerHTML = shell("智能办公工作台（独立页面）", (
+      '<p class="text-sm leading-relaxed text-slate-600">本模块提供独立工作台页面，通过服务端 DeepSeek 大模型完成报销、简历、招标、合同等多场景文档审查。</p>' +
+      '<p class="mt-2 text-xs text-slate-500">请在 Docker 环境变量或项目根目录 <code class="rounded bg-slate-100 px-1">.env</code> 中配置 <code class="rounded bg-slate-100 px-1">DEEPSEEK_API_KEY</code> 后使用。</p>' +
+      '<a href="' + href + '" class="mt-4 inline-flex items-center rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600">进入智能办公工作台</a>'
     ));
-    root.querySelectorAll("[data-tab]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var i = btn.getAttribute("data-tab");
-        root.querySelectorAll("[data-tab]").forEach(function (b) {
-          b.className = "rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200";
-        });
-        btn.className = "rounded-full bg-orange-500 px-3 py-1 text-xs font-medium text-white";
-        root.querySelectorAll("[data-panel]").forEach(function (p) {
-          p.classList.toggle("hidden", p.getAttribute("data-panel") !== i);
-        });
-      });
-    });
   }
 
   function demoLongContextQa(root) {
@@ -1445,8 +2526,8 @@
 
   // --- 按技术栈回退 ---
 
-  function fallbackRag(root) {
-    demoEnterpriseGpt(root);
+  function fallbackRag(root, product) {
+    demoEnterpriseGpt(root, product);
   }
 
   function fallbackCode(root) {
@@ -1465,8 +2546,8 @@
     demoObjectDetect(root);
   }
 
-  function fallbackAiops(root) {
-    demoDevopsLogs(root);
+  function fallbackAiops(root, product) {
+    demoDevopsLogs(root, product);
   }
 
   function fallbackDialog(root) {
@@ -1482,8 +2563,8 @@
     });
   }
 
-  function fallbackGateway(root) {
-    demoAdminRouter(root);
+  function fallbackGateway(root, product) {
+    demoAdminRouter(root, product);
   }
 
   function fallbackDataViz(root) {
