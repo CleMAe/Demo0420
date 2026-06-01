@@ -49,6 +49,9 @@ EMPLOYEE_TRAINING_PRODUCT_NAME = "员工自助：培训陪练"
 SMART_OFFICE_PRODUCT_NAME = "智能办公智能体"
 ADMIN_ROUTER_PRODUCT_NAME = "仅管理员：密钥与模型路由"
 DIRECTOR_SANDBOX_PRODUCT_NAME = "行业总监专区：战略沙盘"
+ASK_DATA_PRODUCT_NAME = "问数智能体"
+NAVIGATION_PRODUCT_NAME = "位置导航智能体"
+OBJECT_DETECTION_PRODUCT_NAME = "目标检测智能体"
 MODULE_PAGE_URLS: dict[str, str] = {
     "企业 GPT 助手": "enterprise-gpt.html",
     COPILOT_PRODUCT_NAME: "copilot.html",
@@ -1069,6 +1072,114 @@ class AdminRouterRotateResponse(BaseModel):
     message: str = ""
 
 
+class CopilotAssistRequest(BaseModel):
+    product_id: int
+    task: Literal["complete", "review", "refactor", "test"]
+    language: Literal["python", "javascript", "sql", "java"] = "python"
+    code: str = Field(min_length=1, max_length=5000)
+    context: str | None = Field(default=None, max_length=500)
+
+
+class CopilotAssistData(BaseModel):
+    task: str
+    language: str
+    completion: str
+    review_items: list[str]
+    refactor_plan: list[str]
+    test_cases: list[str]
+    risk_score: int = Field(ge=0, le=100)
+    model_used: str
+    guardrails: list[str]
+
+
+class CopilotAssistResponse(BaseModel):
+    success: bool
+    data: CopilotAssistData | None = None
+    message: str = ""
+
+
+class NavigationPlanRequest(BaseModel):
+    product_id: int
+    query: str = Field(min_length=1, max_length=300)
+    start: str | None = Field(default=None, max_length=80)
+    end: str | None = Field(default=None, max_length=80)
+    preference: Literal["shortest", "accessible", "less_crowded"] = "shortest"
+
+
+class NavigationNodeOut(BaseModel):
+    id: str
+    label: str
+    x: int
+    y: int
+    aliases: list[str]
+
+
+class NavigationStepOut(BaseModel):
+    node_id: str
+    label: str
+    instruction: str
+
+
+class NavigationPlanData(BaseModel):
+    query: str
+    start_node: NavigationNodeOut
+    end_node: NavigationNodeOut
+    path: list[NavigationStepOut]
+    path_node_ids: list[str]
+    total_distance: int
+    preference: str
+    tool_trace: list[str]
+    model_used: str
+    nodes: list[NavigationNodeOut]
+    edges: list[dict[str, Any]]
+
+
+class NavigationPlanResponse(BaseModel):
+    success: bool
+    data: NavigationPlanData | None = None
+    message: str = ""
+
+
+class ObjectDetectionRequest(BaseModel):
+    product_id: int
+    scene: Literal["warehouse", "campus", "parking"] = "warehouse"
+    threshold: float = Field(default=0.55, ge=0.1, le=0.95)
+    mode: Literal["counting", "safety", "tracking"] = "counting"
+
+
+class ObjectDetectionBox(BaseModel):
+    id: str
+    label: str
+    score: float = Field(ge=0, le=1)
+    x: int = Field(ge=0, le=100)
+    y: int = Field(ge=0, le=100)
+    w: int = Field(ge=1, le=100)
+    h: int = Field(ge=1, le=100)
+    track_id: str
+    status: str
+
+
+class ObjectDetectionData(BaseModel):
+    scene: str
+    mode: str
+    threshold: float
+    frame_id: str
+    detections: list[ObjectDetectionBox]
+    counts: dict[str, int]
+    alerts: list[str]
+    heatmap: list[dict[str, int]]
+    timeline: list[str]
+    inference_ms: int
+    model_version: str
+    disclaimer: str
+
+
+class ObjectDetectionResponse(BaseModel):
+    success: bool
+    data: ObjectDetectionData | None = None
+    message: str = ""
+
+
 class DeepSeekConfigError(RuntimeError):
     """DeepSeek integration is not configured for this deployment."""
 
@@ -1273,6 +1384,58 @@ def _json_object_from_text(text: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise DeepSeekResponseError("模型响应格式不是 JSON 对象")
     return data
+
+
+def _request_deepseek_json(
+    system_prompt: str,
+    payload_obj: dict[str, Any],
+    *,
+    temperature: float = 0.2,
+    max_tokens: int = 900,
+) -> dict[str, Any]:
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not api_key:
+        raise DeepSeekConfigError("未配置 DeepSeek API Key")
+
+    base_url = os.environ.get("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL).rstrip("/")
+    model = os.environ.get("DEEPSEEK_MODEL", DEEPSEEK_MODEL).strip() or DEEPSEEK_MODEL
+    timeout = float(os.environ.get("DEEPSEEK_TIMEOUT", "20"))
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(payload_obj, ensure_ascii=False)},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")[:300]
+        raise DeepSeekResponseError(f"DeepSeek API 返回错误：{exc.code} {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise DeepSeekResponseError(f"DeepSeek API 请求失败：{exc.reason}") from exc
+    except TimeoutError as exc:
+        raise DeepSeekResponseError("DeepSeek API 请求超时") from exc
+
+    try:
+        data = json.loads(body)
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise DeepSeekResponseError("DeepSeek API 响应结构异常") from exc
+    return _json_object_from_text(content)
 
 
 def _string_list(value: Any, fallback: list[str]) -> list[str]:
@@ -2655,7 +2818,6 @@ app.add_middleware(
 )
 
 
-ASK_DATA_PRODUCT_NAME = "问数智能体"
 ASK_DATA_SQL_BLOCKED_KEYWORDS = (
     "insert",
     "update",
@@ -2693,6 +2855,8 @@ class AskDataGenerateData(BaseModel):
     chart_hint: str
     semantic_mapping: AskDataSemanticMapping
     guardrails: list[str]
+    model_used: str
+    generated_by_model: bool
     generated_at: str
 
 
@@ -2727,13 +2891,21 @@ def _require_ask_data_product(
     product_id: int,
     user: dict[str, Any],
 ) -> sqlite3.Row:
+    return _require_named_product(product_id, ASK_DATA_PRODUCT_NAME, user)
+
+
+def _require_named_product(
+    product_id: int,
+    product_name: str,
+    user: dict[str, Any],
+) -> sqlite3.Row:
     with db() as conn:
         row = conn.execute(
             """SELECT id, name, allowed_roles, industry_scope
                FROM products WHERE id = ?""",
             (product_id,),
         ).fetchone()
-    if row is None or row["name"] != ASK_DATA_PRODUCT_NAME or not product_visible_for_user(row, user):
+    if row is None or row["name"] != product_name or not product_visible_for_user(row, user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在或无权访问")
     return row
 
@@ -2842,6 +3014,431 @@ def _ask_data_preview_rows(limit: int, metric: str) -> tuple[list[str], list[dic
             value = 52000 + (i * 2300) % 18000
         rows.append({"week": week, metric: value})
     return columns, rows
+
+
+def _normalize_copilot_result(
+    raw: dict[str, Any],
+    body: CopilotAssistRequest,
+    *,
+    model_used: str,
+) -> CopilotAssistData:
+    return CopilotAssistData(
+        task=body.task,
+        language=body.language,
+        completion=str(
+            raw.get("completion")
+            or "    cached = cache.get(key)\n    if cached is not None:\n        return cached\n    return load_from_db(uid)"
+        ).strip(),
+        review_items=_string_list(
+            raw.get("review_items"),
+            [
+                "缓存 miss 后需要记录降级路径，避免排障时缺少上下文",
+                "外部输入 uid 应保留类型校验和审计日志",
+                "读取数据库建议设置超时，避免请求线程被长时间占用",
+            ],
+        )[:6],
+        refactor_plan=_string_list(
+            raw.get("refactor_plan"),
+            ["拆出缓存访问函数", "将 DB fallback 包装为可观测调用", "为 cache miss 与异常分支补充单元测试"],
+        )[:6],
+        test_cases=_string_list(
+            raw.get("test_cases"),
+            ["cache hit 返回缓存对象", "cache miss 调用 load_from_db", "uid 为空时返回校验错误"],
+        )[:6],
+        risk_score=_clamp_score(raw.get("risk_score"), 38),
+        model_used=model_used,
+        guardrails=[
+            "仅处理用户提交的演示代码片段",
+            "输出不自动写入仓库，需人工确认后应用",
+            "建议项用于研发辅助，不替代代码审查流程",
+        ],
+    )
+
+
+def build_copilot_fallback(body: CopilotAssistRequest) -> CopilotAssistData:
+    code = body.code.strip()
+    lower = code.lower()
+    review_items: list[str] = []
+    risk = 30
+    if "eval(" in lower or "exec(" in lower:
+        review_items.append("发现 eval/exec 形式的动态执行，需确认输入来源并避免执行不可信内容")
+        risk += 30
+    if "select *" in lower:
+        review_items.append("SQL 查询建议显式列名，降低数据泄露和 schema 变更风险")
+        risk += 15
+    if "except:" in lower or "catch (" in lower:
+        review_items.append("宽泛异常捕获会吞掉根因，建议捕获具体异常并记录上下文")
+        risk += 15
+    if "password" in lower or "secret" in lower or "token" in lower:
+        review_items.append("疑似敏感字段出现在代码中，确认没有硬编码真实凭据")
+        risk += 10
+    if not review_items:
+        review_items = ["未发现明显高危反模式，建议继续补充边界条件和失败分支测试"]
+
+    completion_by_lang = {
+        "python": "    cached = cache.get(key)\n    if cached is not None:\n        return cached\n    user = load_from_db(uid)\n    cache.set(key, user, ttl=300)\n    return user",
+        "javascript": "const cached = cache.get(key);\nif (cached) return cached;\nconst user = await loadFromDb(uid);\ncache.set(key, user, 300);\nreturn user;",
+        "sql": "WHERE dt >= date('now', '-28 day')\nGROUP BY region\nORDER BY order_amt DESC\nLIMIT 20;",
+        "java": "var cached = cache.get(key);\nif (cached != null) return cached;\nvar user = repository.load(uid);\ncache.put(key, user);\nreturn user;",
+    }
+    return CopilotAssistData(
+        task=body.task,
+        language=body.language,
+        completion=completion_by_lang.get(body.language, completion_by_lang["python"]),
+        review_items=review_items,
+        refactor_plan=["提取输入校验", "为外部依赖添加超时和重试策略", "把核心逻辑拆成可测试的小函数"],
+        test_cases=["正常路径", "空输入/非法输入", "外部依赖失败", "缓存命中和缓存穿透"],
+        risk_score=max(0, min(100, risk)),
+        model_used="local-rule-fallback",
+        guardrails=[
+            "未配置 DEEPSEEK_API_KEY，当前使用本地规则降级",
+            "输出不自动写入仓库，需人工确认后应用",
+            "建议项用于研发辅助，不替代代码审查流程",
+        ],
+    )
+
+
+def request_deepseek_copilot(body: CopilotAssistRequest) -> CopilotAssistData:
+    raw = _request_deepseek_json(
+        (
+            "你是企业代码 Copilot。根据任务类型、语言和代码片段输出 JSON，不要 Markdown。"
+            "字段必须包含 completion、review_items、refactor_plan、test_cases、risk_score。"
+            "review_items/refactor_plan/test_cases 是中文字符串数组；risk_score 是 0-100 整数。"
+            "completion 只给建议代码片段或补全片段，不要包含真实凭据或外部网络调用。"
+        ),
+        {
+            "task": body.task,
+            "language": body.language,
+            "code": body.code,
+            "context": body.context or "",
+        },
+        temperature=0.2,
+        max_tokens=900,
+    )
+    return _normalize_copilot_result(raw, body, model_used=os.environ.get("DEEPSEEK_MODEL", DEEPSEEK_MODEL))
+
+
+def _build_ask_data_generate_data(
+    question: str,
+    mapping: AskDataSemanticMapping,
+    *,
+    model_used: str,
+    generated_by_model: bool,
+    explain: str | None = None,
+    chart_hint: str | None = None,
+) -> AskDataGenerateData:
+    sql = _build_ask_data_sql(mapping)
+    _ = _ensure_safe_readonly_sql(sql)
+    return AskDataGenerateData(
+        question=question,
+        sql=sql,
+        explain=explain
+        or (
+            f"已将问题映射为「{mapping.metric}」指标，按{mapping.grain}粒度聚合；"
+            "先走语义层口径，再输出可审计 SQL。"
+        ),
+        chart_hint=chart_hint or "趋势分析优先使用折线图；需要对比区域时改为分组柱状图。",
+        semantic_mapping=mapping,
+        guardrails=[
+            "仅允许读取演示语义层表 dw.f_orders",
+            "仅允许单条 SELECT 语句，拦截写入和 DDL/DCL 关键字",
+            "模型只负责生成受控语义映射，SQL 仍经过服务端白名单校验",
+        ],
+        model_used=model_used,
+        generated_by_model=generated_by_model,
+        generated_at=_utc8_now(),
+    )
+
+
+def request_deepseek_ask_data(question: str) -> AskDataGenerateData:
+    raw = _request_deepseek_json(
+        (
+            "你是企业 BI 问数智能体，只能面向演示语义层表 dw.f_orders 生成可审计查询计划。"
+            "输出 JSON，不要 Markdown。字段包含 metric、dimensions、filters、grain、explain、chart_hint。"
+            "metric 只能是 订单金额/订单数/客单价；dimensions 只能从 week/dt/month/region 中选择；"
+            "filters 使用可读中文或 SQL 条件，但不得包含写入、删除、DDL、子查询或真实表名。"
+        ),
+        {"question": question},
+        temperature=0.1,
+        max_tokens=700,
+    )
+    metric = str(raw.get("metric") or "").strip()
+    if metric not in {"订单金额", "订单数", "客单价"}:
+        metric = _ask_data_semantic_parse(question).metric
+    dims_raw = raw.get("dimensions")
+    dimensions = [str(x).strip() for x in dims_raw if str(x).strip()] if isinstance(dims_raw, list) else []
+    dimensions = [x for x in dimensions if x in {"week", "dt", "month", "region"}] or _ask_data_semantic_parse(question).dimensions
+    fallback = _ask_data_semantic_parse(question)
+    filters = list(fallback.filters)
+    grain = str(raw.get("grain") or fallback.grain).strip() or fallback.grain
+    mapping = AskDataSemanticMapping(metric=metric, dimensions=dimensions[:1], filters=filters, grain=grain)
+    return _build_ask_data_generate_data(
+        question,
+        mapping,
+        model_used=os.environ.get("DEEPSEEK_MODEL", DEEPSEEK_MODEL),
+        generated_by_model=True,
+        explain=str(raw.get("explain") or "").strip() or None,
+        chart_hint=str(raw.get("chart_hint") or "").strip() or None,
+    )
+
+
+NAVIGATION_GRAPH_NODES: dict[str, dict[str, Any]] = {
+    "gate": {"label": "园区正门", "x": 8, "y": 42, "aliases": ["大门", "入口", "正门", "gate"]},
+    "lobby": {"label": "一层大厅", "x": 25, "y": 42, "aliases": ["大厅", "前台", "lobby"]},
+    "elevator": {"label": "电梯厅", "x": 42, "y": 42, "aliases": ["电梯", "升降梯", "elevator"]},
+    "meeting": {"label": "B2 会议室", "x": 58, "y": 24, "aliases": ["会议室", "b2", "会议"]},
+    "finance": {"label": "财务共享中心", "x": 78, "y": 24, "aliases": ["财务", "报销", "发票"]},
+    "hr": {"label": "人力服务台", "x": 60, "y": 58, "aliases": ["人力", "hr", "入职", "社保"]},
+    "canteen": {"label": "员工餐厅", "x": 82, "y": 58, "aliases": ["餐厅", "食堂", "吃饭"]},
+    "parking": {"label": "地下停车区", "x": 38, "y": 74, "aliases": ["停车", "车库", "停车场"]},
+}
+
+NAVIGATION_GRAPH_EDGES: list[tuple[str, str, int, bool, int]] = [
+    ("gate", "lobby", 80, True, 25),
+    ("lobby", "elevator", 60, True, 45),
+    ("elevator", "meeting", 70, True, 35),
+    ("meeting", "finance", 55, True, 20),
+    ("elevator", "hr", 65, True, 30),
+    ("hr", "canteen", 75, True, 55),
+    ("lobby", "parking", 90, False, 15),
+    ("parking", "hr", 85, True, 18),
+    ("finance", "canteen", 95, True, 40),
+]
+
+
+def _navigation_node_out(node_id: str) -> NavigationNodeOut:
+    node = NAVIGATION_GRAPH_NODES[node_id]
+    return NavigationNodeOut(id=node_id, label=str(node["label"]), x=int(node["x"]), y=int(node["y"]), aliases=list(node["aliases"]))
+
+
+def _navigation_edges_payload() -> list[dict[str, Any]]:
+    return [
+        {"from": a, "to": b, "distance": d, "accessible": acc, "crowd": crowd}
+        for a, b, d, acc, crowd in NAVIGATION_GRAPH_EDGES
+    ]
+
+
+def _match_navigation_node(text: str, fallback: str) -> str:
+    clean = (text or "").lower()
+    for node_id, node in NAVIGATION_GRAPH_NODES.items():
+        labels = [str(node["label"]).lower()] + [str(x).lower() for x in node["aliases"]]
+        if any(label and label in clean for label in labels):
+            return node_id
+    return fallback
+
+
+def _navigation_start_end_from_text(query: str, start: str | None, end: str | None) -> tuple[str, str]:
+    query_text = query or ""
+    start_text = start or query_text
+    end_text = end or query_text
+    match = re.search(r"(?:从|由)\s*(.+?)\s*(?:到|去|前往|抵达)\s*(.+)", query_text)
+    if match:
+        if not start:
+            start_text = match.group(1)
+        if not end:
+            end_text = match.group(2)
+    return (
+        _match_navigation_node(start_text, "gate"),
+        _match_navigation_node(end_text, "finance"),
+    )
+
+
+def _parse_navigation_intent(body: NavigationPlanRequest) -> tuple[str, str, str, str]:
+    local_start, local_end = _navigation_start_end_from_text(body.query, body.start, body.end)
+    start = local_start
+    end = local_end
+    preference = body.preference
+    model_used = "local-intent-fallback"
+    if os.environ.get("DEEPSEEK_API_KEY", "").strip():
+        try:
+            raw = _request_deepseek_json(
+                (
+                    "你是园区导航意图解析器。只能从节点 gate,lobby,elevator,meeting,finance,hr,canteen,parking 中选择起点和终点。"
+                    "输出 JSON：start、end、preference。preference 只能是 shortest/accessible/less_crowded。"
+                ),
+                {"query": body.query, "start": body.start, "end": body.end, "preference": body.preference},
+                temperature=0.0,
+                max_tokens=300,
+            )
+            start = str(raw.get("start") or start)
+            end = str(raw.get("end") or end)
+            if start not in NAVIGATION_GRAPH_NODES:
+                start = _match_navigation_node(body.start or body.query, "gate")
+            if end not in NAVIGATION_GRAPH_NODES:
+                end = _match_navigation_node(body.end or body.query, "finance")
+            pref = str(raw.get("preference") or preference)
+            if pref in {"shortest", "accessible", "less_crowded"}:
+                preference = pref
+            model_used = os.environ.get("DEEPSEEK_MODEL", DEEPSEEK_MODEL)
+        except (DeepSeekConfigError, DeepSeekResponseError, json.JSONDecodeError):
+            model_used = "local-intent-fallback"
+    # 明确的“从 A 到/去 B”优先于模型补全，避免大模型把门厅/大厅等邻近点误判为起点。
+    start = local_start
+    end = local_end
+    if start == end:
+        end = "finance" if start != "finance" else "gate"
+    return start, end, preference, model_used
+
+
+def _navigation_neighbors(preference: str) -> dict[str, list[tuple[str, int, str]]]:
+    graph: dict[str, list[tuple[str, int, str]]] = {node_id: [] for node_id in NAVIGATION_GRAPH_NODES}
+    for left, right, distance, accessible, crowd in NAVIGATION_GRAPH_EDGES:
+        if preference == "accessible" and not accessible:
+            continue
+        weight = distance
+        if preference == "less_crowded":
+            weight += crowd
+        note = "无障碍" if accessible else "楼梯/坡道"
+        graph[left].append((right, weight, note))
+        graph[right].append((left, weight, note))
+    return graph
+
+
+def _navigation_heuristic(left: str, right: str) -> int:
+    a = NAVIGATION_GRAPH_NODES[left]
+    b = NAVIGATION_GRAPH_NODES[right]
+    return abs(int(a["x"]) - int(b["x"])) + abs(int(a["y"]) - int(b["y"]))
+
+
+def _astar_navigation(start: str, end: str, preference: str) -> tuple[list[str], int, list[str]]:
+    graph = _navigation_neighbors(preference)
+    open_set: set[str] = {start}
+    came_from: dict[str, str] = {}
+    g_score = {node_id: 10**9 for node_id in NAVIGATION_GRAPH_NODES}
+    f_score = {node_id: 10**9 for node_id in NAVIGATION_GRAPH_NODES}
+    g_score[start] = 0
+    f_score[start] = _navigation_heuristic(start, end)
+    trace = [f"tool=A* start={start} end={end} preference={preference}"]
+    while open_set:
+        current = min(open_set, key=lambda n: f_score[n])
+        trace.append(f"expand {current} g={g_score[current]} f={f_score[current]}")
+        if current == end:
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            path.reverse()
+            return path, g_score[end], trace
+        open_set.remove(current)
+        for neighbor, weight, note in graph[current]:
+            tentative = g_score[current] + weight
+            if tentative >= g_score[neighbor]:
+                continue
+            came_from[neighbor] = current
+            g_score[neighbor] = tentative
+            f_score[neighbor] = tentative + _navigation_heuristic(neighbor, end)
+            open_set.add(neighbor)
+            trace.append(f"  relax {neighbor} via {note} cost={tentative}")
+    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="当前偏好下无法规划路线")
+
+
+def build_navigation_plan(body: NavigationPlanRequest) -> NavigationPlanData:
+    start, end, preference, model_used = _parse_navigation_intent(body)
+    path_ids, total_distance, trace = _astar_navigation(start, end, preference)
+    steps: list[NavigationStepOut] = []
+    for index, node_id in enumerate(path_ids):
+        node = NAVIGATION_GRAPH_NODES[node_id]
+        if index == 0:
+            instruction = f"从{node['label']}出发"
+        elif index == len(path_ids) - 1:
+            instruction = f"到达{node['label']}，完成导航"
+        else:
+            instruction = f"经过{node['label']}，继续前往{NAVIGATION_GRAPH_NODES[path_ids[index + 1]]['label']}"
+        steps.append(NavigationStepOut(node_id=node_id, label=str(node["label"]), instruction=instruction))
+    return NavigationPlanData(
+        query=body.query,
+        start_node=_navigation_node_out(start),
+        end_node=_navigation_node_out(end),
+        path=steps,
+        path_node_ids=path_ids,
+        total_distance=total_distance,
+        preference=preference,
+        tool_trace=trace[-12:],
+        model_used=model_used,
+        nodes=[_navigation_node_out(node_id) for node_id in NAVIGATION_GRAPH_NODES],
+        edges=_navigation_edges_payload(),
+    )
+
+
+OBJECT_DETECTION_SCENES: dict[str, dict[str, Any]] = {
+    "warehouse": {
+        "label": "仓储月台",
+        "boxes": [
+            ("d1", "person", 0.91, 13, 26, 16, 30, "T-104", "normal"),
+            ("d2", "forklift", 0.88, 48, 42, 24, 22, "T-211", "moving"),
+            ("d3", "pallet", 0.84, 70, 58, 18, 18, "T-332", "stacked"),
+            ("d4", "helmet_missing", 0.72, 17, 20, 7, 8, "T-104", "risk"),
+        ],
+        "timeline": ["08:01 人员进入月台", "08:02 叉车靠近装卸区", "08:03 检测到未佩戴安全帽风险"],
+    },
+    "campus": {
+        "label": "园区入口",
+        "boxes": [
+            ("d1", "person", 0.94, 18, 38, 12, 28, "T-501", "normal"),
+            ("d2", "person", 0.82, 36, 42, 11, 25, "T-502", "normal"),
+            ("d3", "bicycle", 0.79, 61, 55, 20, 14, "T-611", "moving"),
+            ("d4", "queue", 0.67, 15, 34, 36, 34, "T-Q01", "crowded"),
+        ],
+        "timeline": ["12:10 入口人流增加", "12:11 自行车穿越人行区", "12:12 队列长度超过演示阈值"],
+    },
+    "parking": {
+        "label": "地下停车区",
+        "boxes": [
+            ("d1", "car", 0.93, 12, 42, 24, 18, "T-701", "parked"),
+            ("d2", "car", 0.89, 47, 38, 26, 20, "T-702", "moving"),
+            ("d3", "person", 0.76, 80, 34, 8, 22, "T-803", "normal"),
+            ("d4", "blocked_exit", 0.71, 38, 70, 30, 12, "T-Z01", "risk"),
+        ],
+        "timeline": ["18:20 车辆驶入 B1", "18:21 行人穿越车道", "18:22 出口通道疑似遮挡"],
+    },
+}
+
+
+def build_object_detection_result(body: ObjectDetectionRequest) -> ObjectDetectionData:
+    scene = OBJECT_DETECTION_SCENES[body.scene]
+    detections = [
+        ObjectDetectionBox(
+            id=item[0],
+            label=item[1],
+            score=item[2],
+            x=item[3],
+            y=item[4],
+            w=item[5],
+            h=item[6],
+            track_id=item[7],
+            status=item[8],
+        )
+        for item in scene["boxes"]
+        if float(item[2]) >= body.threshold
+    ]
+    counts: dict[str, int] = {}
+    for det in detections:
+        counts[det.label] = counts.get(det.label, 0) + 1
+    alerts: list[str] = []
+    if any(det.status == "risk" for det in detections):
+        alerts.append("检测到风险事件，请人工复核画面并确认处置")
+    if body.mode == "safety" and counts.get("person", 0) and (counts.get("forklift", 0) or counts.get("car", 0)):
+        alerts.append("人员与移动设备同区域出现，触发安全距离提示")
+    if body.mode == "tracking":
+        alerts.append(f"跟踪链路已关联 {len({det.track_id for det in detections})} 个 track_id（演示）")
+    heatmap = [
+        {"x": det.x + det.w // 2, "y": det.y + det.h // 2, "value": int(det.score * 100)}
+        for det in detections
+    ]
+    return ObjectDetectionData(
+        scene=str(scene["label"]),
+        mode=body.mode,
+        threshold=body.threshold,
+        frame_id=f"SIM-{body.scene.upper()}-{int(body.threshold * 100)}",
+        detections=detections,
+        counts=counts,
+        alerts=alerts or ["当前阈值下未触发风险告警"],
+        heatmap=heatmap,
+        timeline=list(scene["timeline"]),
+        inference_ms=42 + len(detections) * 7,
+        model_version="det-agent-sim-yolo-v8.2",
+        disclaimer="检测框、置信度和事件均为模拟数据，用于演示目标检测智能体工作流。",
+    )
 
 
 @app.on_event("startup")
@@ -3252,30 +3849,19 @@ def generate_ask_data_sql(
 ) -> AskDataGenerateResponse:
     _require_ask_data_product(body.product_id, user)
     question = body.question.strip()
-    mapping = _ask_data_semantic_parse(question)
-    sql = _build_ask_data_sql(mapping)
-    _ = _ensure_safe_readonly_sql(sql)
-    explain = (
-        f"已将问题映射为「{mapping.metric}」指标，按{mapping.grain}粒度聚合；"
-        "先走语义层口径，再输出可审计 SQL。"
-    )
-    chart_hint = "趋势分析优先使用折线图；需要对比区域时改为分组柱状图。"
-    guardrails = [
-        "仅允许读取演示语义层表 dw.f_orders",
-        "仅允许单条 SELECT 语句，拦截写入和 DDL/DCL 关键字",
-        "结果用于演示，不可替代真实经营报表",
-    ]
+    try:
+        data = request_deepseek_ask_data(question)
+    except (DeepSeekConfigError, DeepSeekResponseError, json.JSONDecodeError):
+        mapping = _ask_data_semantic_parse(question)
+        data = _build_ask_data_generate_data(
+            question,
+            mapping,
+            model_used="local-semantic-fallback",
+            generated_by_model=False,
+        )
     return AskDataGenerateResponse(
         success=True,
-        data=AskDataGenerateData(
-            question=question,
-            sql=sql,
-            explain=explain,
-            chart_hint=chart_hint,
-            semantic_mapping=mapping,
-            guardrails=guardrails,
-            generated_at=_utc8_now(),
-        ),
+        data=data,
     )
 
 
@@ -3306,9 +3892,45 @@ def execute_ask_data_sql(
     )
 
 
+@app.post("/api/copilot/assist", response_model=CopilotAssistResponse)
+def copilot_assist(
+    body: CopilotAssistRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> CopilotAssistResponse:
+    _require_named_product(body.product_id, COPILOT_PRODUCT_NAME, user)
+    try:
+        data = request_deepseek_copilot(body)
+    except (DeepSeekConfigError, DeepSeekResponseError, json.JSONDecodeError):
+        data = build_copilot_fallback(body)
+    return CopilotAssistResponse(success=True, data=data)
+
+
+@app.post("/api/navigation/plan", response_model=NavigationPlanResponse)
+def navigation_plan(
+    body: NavigationPlanRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> NavigationPlanResponse:
+    _require_named_product(body.product_id, NAVIGATION_PRODUCT_NAME, user)
+    return NavigationPlanResponse(success=True, data=build_navigation_plan(body))
+
+
+@app.post("/api/object-detection/analyze", response_model=ObjectDetectionResponse)
+def object_detection_analyze(
+    body: ObjectDetectionRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> ObjectDetectionResponse:
+    _require_named_product(body.product_id, OBJECT_DETECTION_PRODUCT_NAME, user)
+    return ObjectDetectionResponse(success=True, data=build_object_detection_result(body))
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/{asset_path:path}", include_in_schema=False)

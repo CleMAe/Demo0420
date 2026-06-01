@@ -260,23 +260,29 @@
     loadSources();
   }
 
-  function demoCopilot(root) {
+  function demoCopilot(root, product) {
     var inStandalone = /\/copilot\.html(?:$|[?#])/.test(window.location.pathname + window.location.search);
     root.innerHTML = shell("IDE 内联补全与评审建议", (
-      '<div class="space-y-4">' +
-      '<div class="rounded-xl border border-slate-200 bg-slate-900 p-4 font-mono text-xs text-slate-100">' +
-      "<pre class=\"whitespace-pre-wrap\">def fetch_user(uid: str) -&gt; dict:\n" +
-      "    \"\"\"从缓存读取用户\"\"\"\n" +
-      "    key = f\"user:{uid}\"\n" +
-      "<span data-slot=\"ghost\" class=\"text-slate-500\"></span></pre>" +
-      '<button type="button" data-action="complete" class="mt-3 rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600">' +
-      "生成补全" +
-      "</button></div>" +
+      '<div class="grid gap-4 lg:grid-cols-[1fr_0.95fr]">' +
+      '<div class="space-y-3">' +
+      '<div class="grid gap-3 sm:grid-cols-3">' +
+      '<label class="text-xs font-medium text-slate-600">任务类型<select data-field="task" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"><option value="complete">内联补全</option><option value="review">代码审查</option><option value="refactor">重构建议</option><option value="test">测试生成</option></select></label>' +
+      '<label class="text-xs font-medium text-slate-600">语言<select data-field="language" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"><option value="python">Python</option><option value="javascript">JavaScript</option><option value="sql">SQL</option><option value="java">Java</option></select></label>' +
+      '<label class="text-xs font-medium text-slate-600">上下文<input data-field="context" value="企业缓存读取函数" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" /></label>' +
+      '</div>' +
+      '<label class="block text-xs font-medium text-slate-600">代码片段</label>' +
+      '<textarea data-field="code" rows="12" class="w-full resize-y rounded-xl border border-slate-200 bg-slate-900 px-4 py-3 font-mono text-xs leading-relaxed text-slate-100 outline-none ring-orange-500/20 focus:border-orange-500 focus:ring-4">def fetch_user(uid: str) -> dict:\n    \"\"\"从缓存读取用户\"\"\"\n    key = f\"user:{uid}\"\n    return cache.get(key) or load_from_db(uid)</textarea>' +
+      '<div class="flex flex-wrap gap-2">' +
+      '<button type="button" data-action="assist" class="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">调用 Copilot</button>' +
+      '<button type="button" data-action="sample" class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">切换样例</button>' +
+      '</div></div>' +
+      '<div data-slot="out" class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">选择任务后调用后端 Copilot 接口。已配置 DeepSeek 时使用大模型，否则使用本地规则降级。</div>' +
+      '</div>' +
       (inStandalone ? (
       '<div class="grid gap-3 sm:grid-cols-3">' +
-      '<div class="rounded-xl border border-slate-200 bg-white p-4"><p class="text-xs text-slate-500">代码审查</p><p class="mt-1 text-sm font-medium text-slate-900">安全漏洞、反模式与性能建议</p></div>' +
-      '<div class="rounded-xl border border-slate-200 bg-white p-4"><p class="text-xs text-slate-500">重构建议</p><p class="mt-1 text-sm font-medium text-slate-900">复杂度降低与职责拆分</p></div>' +
-      '<div class="rounded-xl border border-slate-200 bg-white p-4"><p class="text-xs text-slate-500">规范检查</p><p class="mt-1 text-sm font-medium text-slate-900">命名、注释、安全与性能清单</p></div>' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4"><p class="text-xs text-slate-500">模型补全</p><p class="mt-1 text-sm font-medium text-slate-900">补全、审查、重构、测试四种任务统一走后端接口</p></div>' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4"><p class="text-xs text-slate-500">安全护栏</p><p class="mt-1 text-sm font-medium text-slate-900">输出不写仓库，硬编码凭据/动态执行会被标记</p></div>' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4"><p class="text-xs text-slate-500">降级演示</p><p class="mt-1 text-sm font-medium text-slate-900">无 API Key 时仍展示规则推理结果</p></div>' +
       '</div>'
       ) : (
       '<div class="rounded-xl border border-amber-200 bg-amber-50 p-4">' +
@@ -289,10 +295,90 @@
       )) +
       '</div>'
     ));
-    bind(root, "[data-action=\"complete\"]", "click", function () {
-      var g = root.querySelector("[data-slot=\"ghost\"]");
-      g.textContent = "    return cache.get(key) or load_from_db(uid)";
-      g.className = "text-emerald-400/90";
+    var samples = [
+      'def fetch_user(uid: str) -> dict:\\n    """从缓存读取用户"""\\n    key = f"user:{uid}"\\n    return cache.get(key) or load_from_db(uid)',
+      "async function loadOrder(id) {\\n  const token = localStorage.getItem('token');\\n  return fetch('/api/orders/' + id + '?token=' + token);\\n}",
+      "SELECT * FROM orders WHERE region = '华东' AND dt >= date('now', '-7 day');"
+    ];
+    var sampleIndex = 0;
+
+    function renderCopilot(data) {
+      var out = root.querySelector("[data-slot=\"out\"]");
+      var reviews = (data.review_items || []).map(function (item) {
+        return '<li>' + escapeHtml(item) + '</li>';
+      }).join("");
+      var plans = (data.refactor_plan || []).map(function (item) {
+        return '<li>' + escapeHtml(item) + '</li>';
+      }).join("");
+      var tests = (data.test_cases || []).map(function (item) {
+        return '<li>' + escapeHtml(item) + '</li>';
+      }).join("");
+      var guardrails = (data.guardrails || []).map(function (item) {
+        return '<span class="rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-600">' + escapeHtml(item) + '</span>';
+      }).join("");
+      out.className = "rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700";
+      out.innerHTML =
+        '<div class="flex flex-wrap items-center justify-between gap-2">' +
+        '<p class="font-medium text-slate-900">Copilot 结果 · ' + escapeHtml(data.model_used || "unknown") + '</p>' +
+        '<span class="rounded-lg bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700">风险 ' + escapeHtml(String(data.risk_score || 0)) + '/100</span></div>' +
+        '<p class="mt-3 text-xs font-semibold text-slate-500">建议补全</p>' +
+        '<pre class="mt-1 overflow-x-auto rounded-xl bg-slate-900 p-3 font-mono text-xs leading-relaxed text-emerald-300">' + escapeHtml(data.completion || "") + '</pre>' +
+        '<div class="mt-4 grid gap-3 md:grid-cols-3">' +
+        '<div><p class="text-xs font-semibold text-slate-500">审查发现</p><ul class="mt-1 list-disc space-y-1 pl-5 text-xs">' + reviews + '</ul></div>' +
+        '<div><p class="text-xs font-semibold text-slate-500">重构计划</p><ul class="mt-1 list-disc space-y-1 pl-5 text-xs">' + plans + '</ul></div>' +
+        '<div><p class="text-xs font-semibold text-slate-500">测试建议</p><ul class="mt-1 list-disc space-y-1 pl-5 text-xs">' + tests + '</ul></div></div>' +
+        '<div class="mt-4 flex flex-wrap gap-2">' + guardrails + '</div>';
+    }
+
+    bind(root, "[data-action=\"sample\"]", "click", function () {
+      sampleIndex = (sampleIndex + 1) % samples.length;
+      root.querySelector("[data-field=\"code\"]").value = samples[sampleIndex];
+      root.querySelector("[data-field=\"language\"]").value = sampleIndex === 1 ? "javascript" : sampleIndex === 2 ? "sql" : "python";
+    });
+
+    bind(root, "[data-action=\"assist\"]", "click", function () {
+      var out = root.querySelector("[data-slot=\"out\"]");
+      var btn = root.querySelector("[data-action=\"assist\"]");
+      var token = localStorage.getItem("portal_token");
+      var code = root.querySelector("[data-field=\"code\"]").value.trim();
+      out.className = "rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600";
+      if (!token || !(product && product.id)) {
+        out.innerHTML = '<p class="text-red-700">未登录或缺少产品信息。</p>';
+        return;
+      }
+      if (!code) {
+        out.innerHTML = '<p class="text-red-700">请先输入代码片段。</p>';
+        return;
+      }
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 生成中";
+      out.innerHTML = '<p class="flex items-center gap-2">' + spinHtml() + " 正在调用 Copilot 后端接口…</p>";
+      fetch(apiBase() + "/api/copilot/assist", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          product_id: product.id,
+          task: root.querySelector("[data-field=\"task\"]").value,
+          language: root.querySelector("[data-field=\"language\"]").value,
+          context: root.querySelector("[data-field=\"context\"]").value,
+          code: code
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (body) {
+            if (!res.ok) throw new Error((body && body.detail) || "生成失败");
+            return body;
+          });
+        })
+        .then(function (body) { renderCopilot(body.data || {}); })
+        .catch(function (ex) {
+          out.className = "rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700";
+          out.textContent = ex.message || "生成失败";
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "调用 Copilot";
+        });
     });
   }
 
@@ -1752,38 +1838,87 @@
   }
 
   function demoDirectorSandbox(root) {
-    root.innerHTML = shell("战略沙盘（演示）", (
-      '<div class="space-y-4">' +
-      '<div class="grid gap-4 sm:grid-cols-3">' +
-      '<div><label class="text-xs text-slate-600">销售弹性</label>' +
-      '<input type="range" data-range="s" min="0" max="100" value="55" class="mt-1 w-full accent-orange-500" /></div>' +
-      '<div><label class="text-xs text-slate-600">运营成本压力</label>' +
-      '<input type="range" data-range="c" min="0" max="100" value="40" class="mt-1 w-full accent-orange-500" /></div>' +
-      '<div><label class="text-xs text-slate-600">研发投入</label>' +
-      '<input type="range" data-range="r" min="0" max="100" value="65" class="mt-1 w-full accent-orange-500" /></div></div>' +
-      '<div class="mt-4 grid grid-cols-3 gap-3 text-center">' +
-      '<div class="rounded-xl border border-slate-200 bg-slate-50 p-3"><p class="text-xs text-slate-500">营收增速</p>' +
-      '<p data-kpi="rev" class="mt-1 text-xl font-semibold text-slate-900">—</p></div>' +
-      '<div class="rounded-xl border border-slate-200 bg-slate-50 p-3"><p class="text-xs text-slate-500">毛利率</p>' +
-      '<p data-kpi="margin" class="mt-1 text-xl font-semibold text-slate-900">—</p></div>' +
-      '<div class="rounded-xl border border-slate-200 bg-slate-50 p-3"><p class="text-xs text-slate-500">现金流</p>' +
-      '<p data-kpi="cash" class="mt-1 text-xl font-semibold text-slate-900">—</p></div></div>' +
-      '</div>'
+    root.innerHTML = shell("战略沙盘与经营可视化", (
+      '<div class="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">' +
+      '<section class="space-y-4 rounded-xl border border-slate-200 bg-white p-4">' +
+      '<div class="grid gap-3 sm:grid-cols-2">' +
+      '<label class="text-xs font-medium text-slate-600">市场需求<input type="range" data-range="demand" min="0" max="100" value="62" class="mt-2 w-full accent-orange-500" /></label>' +
+      '<label class="text-xs font-medium text-slate-600">价格压力<input type="range" data-range="price" min="0" max="100" value="35" class="mt-2 w-full accent-orange-500" /></label>' +
+      '<label class="text-xs font-medium text-slate-600">运营成本<input type="range" data-range="cost" min="0" max="100" value="42" class="mt-2 w-full accent-orange-500" /></label>' +
+      '<label class="text-xs font-medium text-slate-600">研发投入<input type="range" data-range="rd" min="0" max="100" value="58" class="mt-2 w-full accent-orange-500" /></label>' +
+      '</div>' +
+      '<label class="block text-xs font-medium text-slate-600">策略情景<select data-field="scenario" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"><option value="growth">增长优先</option><option value="margin">利润优先</option><option value="cash">现金流防守</option></select></label>' +
+      '<div class="rounded-xl border border-slate-200 bg-slate-50 p-3">' +
+      '<p class="text-xs font-semibold text-slate-500">资源分配</p>' +
+      '<div class="mt-3 grid gap-2 text-xs text-slate-600">' +
+      '<label>销售<input type="range" data-alloc="sales" min="10" max="60" value="35" class="w-full accent-teal-500" /></label>' +
+      '<label>交付<input type="range" data-alloc="delivery" min="10" max="60" value="30" class="w-full accent-sky-500" /></label>' +
+      '<label>研发<input type="range" data-alloc="research" min="10" max="60" value="35" class="w-full accent-violet-500" /></label>' +
+      '</div></div>' +
+      '</section>' +
+      '<section class="space-y-4">' +
+      '<div class="grid grid-cols-2 gap-3 md:grid-cols-4 text-center">' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-500">营收增速</p><p data-kpi="rev" class="mt-1 text-xl font-semibold text-slate-900">—</p></div>' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-500">毛利率</p><p data-kpi="margin" class="mt-1 text-xl font-semibold text-slate-900">—</p></div>' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-500">现金流</p><p data-kpi="cash" class="mt-1 text-xl font-semibold text-slate-900">—</p></div>' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-3"><p class="text-xs text-slate-500">风险指数</p><p data-kpi="risk" class="mt-1 text-xl font-semibold text-slate-900">—</p></div>' +
+      '</div>' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4">' +
+      '<div class="flex items-center justify-between"><p class="text-xs font-semibold text-slate-500">季度经营曲线</p><span data-slot="summary" class="text-xs text-slate-400"></span></div>' +
+      '<div data-slot="chart" class="mt-4 flex h-44 items-end gap-2 border-b border-l border-slate-200 px-2"></div>' +
+      '</div>' +
+      '<div class="grid gap-4 md:grid-cols-2">' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4"><p class="text-xs font-semibold text-slate-500">部门贡献</p><div data-slot="alloc-chart" class="mt-3 space-y-2"></div></div>' +
+      '<div class="rounded-xl border border-slate-200 bg-white p-4"><p class="text-xs font-semibold text-slate-500">经营建议</p><ul data-slot="advice" class="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-600"></ul></div>' +
+      '</div></section></div>'
     ));
     function recalc() {
-      var s = +root.querySelector("[data-range=\"s\"]").value;
-      var c = +root.querySelector("[data-range=\"c\"]").value;
-      var r = +root.querySelector("[data-range=\"r\"]").value;
-      var rev = (8 + s * 0.12 - c * 0.05).toFixed(1);
-      var margin = (32 - c * 0.08 + r * 0.04).toFixed(1);
-      var cash = (s - c + r * 0.3).toFixed(0);
+      var demand = +root.querySelector("[data-range=\"demand\"]").value;
+      var price = +root.querySelector("[data-range=\"price\"]").value;
+      var cost = +root.querySelector("[data-range=\"cost\"]").value;
+      var rd = +root.querySelector("[data-range=\"rd\"]").value;
+      var scenario = root.querySelector("[data-field=\"scenario\"]").value;
+      var sales = +root.querySelector("[data-alloc=\"sales\"]").value;
+      var delivery = +root.querySelector("[data-alloc=\"delivery\"]").value;
+      var research = +root.querySelector("[data-alloc=\"research\"]").value;
+      var scenarioBoost = scenario === "growth" ? 1.18 : scenario === "margin" ? 0.92 : 0.78;
+      var revNum = (5 + demand * 0.18 + sales * 0.05 - price * 0.07) * scenarioBoost;
+      var marginNum = 28 + rd * 0.05 + delivery * 0.06 - cost * 0.12 - (scenario === "growth" ? 2.5 : 0);
+      var cashNum = Math.round(demand * 0.7 + delivery * 0.8 - cost * 1.1 - rd * 0.35 + (scenario === "cash" ? 26 : 0));
+      var riskNum = Math.max(5, Math.min(95, Math.round(price * 0.4 + cost * 0.45 + (100 - delivery) * 0.2 - rd * 0.1)));
+      var rev = revNum.toFixed(1);
+      var margin = marginNum.toFixed(1);
+      var cash = (cashNum > 0 ? "+" : "") + cashNum;
       root.querySelector("[data-kpi=\"rev\"]").textContent = rev + "%";
       root.querySelector("[data-kpi=\"margin\"]").textContent = margin + "%";
-      root.querySelector("[data-kpi=\"cash\"]").textContent = (cash > 0 ? "+" : "") + cash + "（模拟）";
+      root.querySelector("[data-kpi=\"cash\"]").textContent = cash + "（模拟）";
+      root.querySelector("[data-kpi=\"risk\"]").textContent = riskNum;
+      var chart = root.querySelector("[data-slot=\"chart\"]");
+      var quarters = [0.72, 0.86, 1.0, 1.08, 1.16, 1.22];
+      chart.innerHTML = quarters.map(function (m, i) {
+        var h = Math.max(16, Math.min(100, Math.round((revNum * 3 + marginNum) * m)));
+        return '<div class="flex flex-1 flex-col items-center justify-end gap-1"><div class="w-full rounded-t bg-gradient-to-t from-orange-500 to-teal-400" style="height:' + h + '%"></div><span class="text-[10px] text-slate-400">Q' + ((i % 4) + 1) + '</span></div>';
+      }).join("");
+      var alloc = root.querySelector("[data-slot=\"alloc-chart\"]");
+      alloc.innerHTML = [
+        ["销售", sales, "bg-teal-500"],
+        ["交付", delivery, "bg-sky-500"],
+        ["研发", research, "bg-violet-500"]
+      ].map(function (item) {
+        return '<div><div class="flex justify-between text-xs"><span>' + item[0] + '</span><span>' + item[1] + '%</span></div><div class="mt-1 h-2 overflow-hidden rounded-full bg-slate-100"><span class="block h-full rounded-full ' + item[2] + '" style="width:' + item[1] + '%"></span></div></div>';
+      }).join("");
+      var advice = [];
+      if (riskNum > 55) advice.push("成本与价格压力偏高，建议提高交付资源或切换现金流防守情景。");
+      if (revNum > 18) advice.push("增长动能充足，可在销售侧增加行业样板客户打法。");
+      if (marginNum < 28) advice.push("毛利承压，建议复盘低毛利项目并收紧折扣策略。");
+      if (rd > 55) advice.push("研发投入较高，适合沉淀可复用智能体组件和行业模板。");
+      root.querySelector("[data-slot=\"advice\"]").innerHTML = advice.map(function (x) { return "<li>" + escapeHtml(x) + "</li>"; }).join("");
+      root.querySelector("[data-slot=\"summary\"]").textContent = scenario === "growth" ? "增长曲线" : scenario === "margin" ? "利润曲线" : "现金流曲线";
     }
-    root.querySelectorAll("[data-range]").forEach(function (el) {
+    root.querySelectorAll("[data-range], [data-alloc]").forEach(function (el) {
       el.addEventListener("input", recalc);
     });
+    bind(root, "[data-field=\"scenario\"]", "change", recalc);
     recalc();
   }
 
@@ -2085,98 +2220,258 @@
     });
   }
 
-  function demoAskData(root) {
-    root.innerHTML = shell("问数 · NL → SQL（模拟）", (
-      '<textarea data-field="nl" rows="2" class="w-full rounded-xl border border-slate-200 bg-slate-50/50 p-3 text-sm" placeholder="用自然语言描述指标…">上月华东区订单金额按周趋势</textarea>' +
-      '<button type="button" data-action="sql" class="mt-2 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">生成可审计 SQL（模拟）</button>' +
-      '<pre data-slot="sql" class="mt-3 hidden overflow-x-auto rounded-xl border border-slate-200 bg-slate-900 p-3 font-mono text-xs text-emerald-300"></pre>' +
-      '<p data-slot="viz" class="mt-2 hidden text-xs text-slate-600"></p>'
+  function demoAskData(root, product) {
+    root.innerHTML = shell("问数 · 模型生成可审计 SQL", (
+      '<div class="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">' +
+      '<section class="space-y-3">' +
+      '<textarea data-field="nl" rows="4" class="w-full rounded-xl border border-slate-200 bg-slate-50/50 p-3 text-sm leading-relaxed" placeholder="用自然语言描述指标…">上月华东区订单金额按周趋势，并解释口径</textarea>' +
+      '<div class="flex flex-wrap gap-2">' +
+      '<button type="button" data-action="sql" class="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300">生成 SQL</button>' +
+      '<button type="button" data-action="exec" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:text-slate-400" disabled>执行预览</button>' +
+      '</div>' +
+      '<div class="grid gap-2 text-xs sm:grid-cols-3">' +
+      '<button type="button" data-preset="上月华东区订单金额按周趋势" class="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-600">华东金额趋势</button>' +
+      '<button type="button" data-preset="本月全国订单数按天变化" class="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-600">全国订单数</button>' +
+      '<button type="button" data-preset="最近28天华南客单价按周趋势" class="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-600">华南客单价</button>' +
+      '</div>' +
+      '<pre data-slot="sql" class="hidden overflow-x-auto rounded-xl border border-slate-200 bg-slate-900 p-3 font-mono text-xs text-emerald-300"></pre>' +
+      '<div data-slot="meta" class="hidden rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600"></div>' +
+      '</section>' +
+      '<section class="space-y-3">' +
+      '<div data-slot="chart" class="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">生成并执行 SQL 后展示样本结果图表。</div>' +
+      '<div data-slot="table" class="max-h-64 overflow-auto rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600"></div>' +
+      '</section></div>'
     ));
-    bind(root, "[data-action=\"sql\"]", "click", function () {
-      var nl = root.querySelector("[data-field=\"nl\"]").value.trim();
-      var pre = root.querySelector("[data-slot=\"sql\"]");
-      var viz = root.querySelector("[data-slot=\"viz\"]");
-      pre.classList.remove("hidden");
-      pre.textContent = "SELECT week, SUM(order_amt) amt\nFROM dw.f_orders\nWHERE region = '华东' AND dt BETWEEN ...\nGROUP BY 1 ORDER BY 1;";
-      viz.classList.remove("hidden");
-      viz.innerHTML =
-        "语义层映射：<code class=\"rounded bg-slate-100 px-1\">订单金额=含税成交额</code> · 图表建议：折线图（模拟）<br/>问题摘要：" +
-        escapeHtml(nl);
-    });
-  }
+    var lastSql = "";
 
-  function demoNavigation(root) {
-    root.innerHTML = shell("语义导航（网格模拟）", (
-      '<p class="mb-2 text-xs text-slate-500">依次点击起点、终点，然后规划路线。</p>' +
-      '<div data-grid class="grid max-w-xs grid-cols-5 gap-1"></div>' +
-      '<button type="button" data-action="plan" class="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">规划路线</button>' +
-      '<p data-slot="path" class="mt-2 text-xs text-slate-600"></p>'
-    ));
-    var grid = root.querySelector("[data-grid]");
-    var cells = [];
-    for (var i = 0; i < 25; i++) {
-      cells.push("<button type=\"button\" data-cell=\"" + i + "\" class=\"h-9 rounded border border-slate-200 bg-white text-[10px] text-slate-400 hover:border-orange-300\">" + i + "</button>");
+    function jsonResponse(res) {
+      return res.json().then(function (body) {
+        if (!res.ok) throw new Error((body && body.detail) || "请求失败");
+        return body;
+      });
     }
-    grid.innerHTML = cells.join("");
-    var picks = [];
-    root.querySelectorAll("[data-cell]").forEach(function (btn) {
+    function renderMeta(data) {
+      var mapping = data.semantic_mapping || {};
+      root.querySelector("[data-slot=\"meta\"]").classList.remove("hidden");
+      root.querySelector("[data-slot=\"meta\"]").innerHTML =
+        '<p class="font-medium text-slate-900">生成来源：' + escapeHtml(data.model_used || "") + (data.generated_by_model ? "（模型）" : "（规则降级）") + '</p>' +
+        '<p class="mt-2">' + escapeHtml(data.explain || "") + '</p>' +
+        '<p class="mt-2">指标：' + escapeHtml(mapping.metric || "") + " · 维度：" + escapeHtml((mapping.dimensions || []).join(", ")) + " · 粒度：" + escapeHtml(mapping.grain || "") + '</p>' +
+        '<p class="mt-2">图表建议：' + escapeHtml(data.chart_hint || "") + '</p>' +
+        '<div class="mt-2 flex flex-wrap gap-1">' + (data.guardrails || []).map(function (x) { return '<span class="rounded bg-white px-2 py-0.5">' + escapeHtml(x) + '</span>'; }).join("") + '</div>';
+    }
+    function renderRows(data) {
+      var rows = data.rows || [];
+      var cols = data.columns || [];
+      var chart = root.querySelector("[data-slot=\"chart\"]");
+      var valueCol = cols[1] || "order_amt";
+      var max = Math.max.apply(null, rows.map(function (r) { return Number(r[valueCol]) || 0; }).concat([1]));
+      chart.innerHTML =
+        '<div class="flex items-center justify-between"><p class="text-sm font-semibold text-slate-900">执行预览</p><span class="text-xs text-slate-400">' + escapeHtml(data.executed_at || "") + '</span></div>' +
+        '<div class="mt-4 flex h-44 items-end gap-2 border-b border-l border-slate-200 px-2">' +
+        rows.slice(0, 12).map(function (r) {
+          var h = Math.max(8, Math.round((Number(r[valueCol]) || 0) / max * 100));
+          return '<div class="flex flex-1 flex-col items-center justify-end gap-1"><div class="w-full rounded-t bg-orange-500" style="height:' + h + '%"></div><span class="text-[10px] text-slate-400">' + escapeHtml(String(r[cols[0]] || "")) + '</span></div>';
+        }).join("") + '</div><p class="mt-2 text-xs text-slate-500">' + escapeHtml(data.result_note || "") + '</p>';
+      root.querySelector("[data-slot=\"table\"]").innerHTML =
+        '<table class="min-w-full text-left"><thead><tr>' + cols.map(function (c) { return '<th class="border-b border-slate-200 py-1 pr-3 text-slate-400">' + escapeHtml(c) + '</th>'; }).join("") +
+        '</tr></thead><tbody>' + rows.slice(0, 20).map(function (r) { return '<tr>' + cols.map(function (c) { return '<td class="border-b border-slate-100 py-1 pr-3">' + escapeHtml(String(r[c])) + '</td>'; }).join("") + '</tr>'; }).join("") + '</tbody></table>';
+    }
+    root.querySelectorAll("[data-preset]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var idx = +btn.getAttribute("data-cell");
-        if (picks.length >= 2) picks = [];
-        picks.push(idx);
-        root.querySelectorAll("[data-cell]").forEach(function (b) {
-          b.className = "h-9 rounded border border-slate-200 bg-white text-[10px] text-slate-400 hover:border-orange-300";
-        });
-        picks.forEach(function (p) {
-          var b = root.querySelector("[data-cell=\"" + p + "\"]");
-          b.className = "h-9 rounded border-2 border-orange-500 bg-orange-50 text-[10px] font-medium text-orange-800";
-        });
+        root.querySelector("[data-field=\"nl\"]").value = btn.getAttribute("data-preset") || "";
       });
     });
-    bind(root, "[data-action=\"plan\"]", "click", function () {
-      if (picks.length < 2) {
-        root.querySelector("[data-slot=\"path\"]").textContent = "请先选择起点与终点。";
-        return;
-      }
-      var a = picks[0];
-      var b = picks[1];
-      var path = [];
-      var x0 = a % 5, y0 = (a / 5) | 0, x1 = b % 5, y1 = (b / 5) | 0;
-      var x = x0, y = y0;
-      path.push(y * 5 + x);
-      while (x !== x1) {
-        x += x < x1 ? 1 : -1;
-        path.push(y * 5 + x);
-      }
-      while (y !== y1) {
-        y += y < y1 ? 1 : -1;
-        path.push(y * 5 + x);
-      }
-      root.querySelectorAll("[data-cell]").forEach(function (el) {
-        var i = +el.getAttribute("data-cell");
-        if (path.indexOf(i) >= 0 && picks.indexOf(i) < 0) {
-          el.className = "h-9 rounded border border-orange-200 bg-orange-100 text-[10px] text-orange-900";
-        }
+    bind(root, "[data-action=\"sql\"]", "click", function () {
+      var btn = root.querySelector("[data-action=\"sql\"]");
+      var out = root.querySelector("[data-slot=\"sql\"]");
+      var question = root.querySelector("[data-field=\"nl\"]").value.trim();
+      if (!question || !(product && product.id)) return;
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 生成中";
+      out.classList.remove("hidden");
+      out.textContent = "generating...";
+      fetch(apiBase() + "/api/ask-data/generate", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ product_id: product.id, question: question })
+      }).then(jsonResponse).then(function (body) {
+        var data = body.data || {};
+        lastSql = data.sql || "";
+        out.textContent = lastSql;
+        renderMeta(data);
+        root.querySelector("[data-action=\"exec\"]").disabled = !lastSql;
+      }).catch(function (ex) {
+        out.textContent = ex.message || "生成失败";
+      }).finally(function () {
+        btn.disabled = false;
+        btn.textContent = "生成 SQL";
       });
-      root.querySelector("[data-slot=\"path\"]").textContent =
-        "模拟路径（曼哈顿距离）：经过 " + path.length + " 格，偏好无障碍主通道（演示）。";
+    });
+    bind(root, "[data-action=\"exec\"]", "click", function () {
+      var btn = root.querySelector("[data-action=\"exec\"]");
+      if (!lastSql || !(product && product.id)) return;
+      btn.disabled = true;
+      btn.textContent = "执行中";
+      fetch(apiBase() + "/api/ask-data/execute", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ product_id: product.id, sql: lastSql, limit: 12 })
+      }).then(jsonResponse).then(function (body) {
+        renderRows(body.data || {});
+      }).catch(function (ex) {
+        root.querySelector("[data-slot=\"chart\"]").innerHTML = '<p class="text-red-700">' + escapeHtml(ex.message || "执行失败") + '</p>';
+      }).finally(function () {
+        btn.disabled = false;
+        btn.textContent = "执行预览";
+      });
     });
   }
 
-  function demoObjectDetect(root) {
-    root.innerHTML = shell("目标检测预览", (
-      '<div class="relative aspect-video max-h-52 w-full overflow-hidden rounded-xl border border-slate-200 bg-gradient-to-br from-sky-100 to-slate-200">' +
-      '<div data-box="1" class="absolute left-[12%] top-[28%] hidden h-[22%] w-[18%] rounded border-2 border-orange-500 bg-orange-500/10 shadow-sm">' +
-      '<span class="absolute -top-5 left-0 rounded bg-orange-500 px-1.5 py-0.5 text-[10px] text-white">person 0.91</span></div>' +
-      '<div data-box="2" class="absolute left-[55%] top-[48%] hidden h-[16%] w-[24%] rounded border-2 border-orange-500 bg-orange-500/10">' +
-      '<span class="absolute -top-5 left-0 rounded bg-orange-500 px-1.5 py-0.5 text-[10px] text-white">pallet 0.84</span></div></div>' +
-      '<button type="button" data-action="run" class="mt-3 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">运行检测（模拟）</button>' +
-      '<p data-slot="cnt" class="mt-2 text-xs text-slate-600"></p>'
+  function demoNavigation(root, product) {
+    root.innerHTML = shell("自然语言导航 · A* 工具调用", (
+      '<div class="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">' +
+      '<section class="space-y-3">' +
+      '<textarea data-field="query" rows="3" class="w-full rounded-xl border border-slate-200 bg-slate-50/50 p-3 text-sm leading-relaxed">从园区正门去财务共享中心，优先无障碍路线</textarea>' +
+      '<div class="grid gap-3 sm:grid-cols-3">' +
+      '<input data-field="start" placeholder="起点，可留空" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />' +
+      '<input data-field="end" placeholder="终点，可留空" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />' +
+      '<select data-field="preference" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"><option value="shortest">最短路径</option><option value="accessible">无障碍优先</option><option value="less_crowded">少拥挤</option></select>' +
+      '</div>' +
+      '<button type="button" data-action="plan" class="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-orange-600 disabled:bg-orange-300">规划路线</button>' +
+      '<div data-slot="result" class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">大模型解析自然语言意图，后端将 A* 路径规划包装为工具执行。</div>' +
+      '</section>' +
+      '<section><div data-slot="map" class="relative aspect-[4/3] overflow-hidden rounded-xl border border-slate-200 bg-slate-50"></div><div data-slot="trace" class="mt-3 max-h-40 overflow-auto rounded-xl border border-slate-200 bg-white p-3 font-mono text-[11px] text-slate-500"></div></section>' +
+      '</div>'
     ));
+    function renderMap(data) {
+      var nodes = data.nodes || [];
+      var path = data.path_node_ids || [];
+      var map = root.querySelector("[data-slot=\"map\"]");
+      var edges = (data.edges || []).map(function (e) {
+        var a = nodes.find(function (n) { return n.id === e.from; });
+        var b = nodes.find(function (n) { return n.id === e.to; });
+        if (!a || !b) return "";
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var len = Math.sqrt(dx * dx + dy * dy);
+        var angle = Math.atan2(dy, dx) * 180 / Math.PI;
+        var active = path.indexOf(e.from) >= 0 && path.indexOf(e.to) >= 0 && Math.abs(path.indexOf(e.from) - path.indexOf(e.to)) === 1;
+        return '<div class="absolute h-0.5 origin-left ' + (active ? 'bg-orange-500' : 'bg-slate-300') + '" style="left:' + a.x + '%;top:' + a.y + '%;width:' + len + '%;transform:rotate(' + angle + 'deg)"></div>';
+      }).join("");
+      var nodeHtml = nodes.map(function (n) {
+        var active = path.indexOf(n.id) >= 0;
+        return '<div class="absolute -translate-x-1/2 -translate-y-1/2 text-center" style="left:' + n.x + '%;top:' + n.y + '%"><span class="mx-auto block h-4 w-4 rounded-full border-2 ' + (active ? 'border-orange-500 bg-orange-100' : 'border-slate-400 bg-white') + '"></span><span class="mt-1 block max-w-20 rounded bg-white/90 px-1 text-[10px] text-slate-600 shadow-sm">' + escapeHtml(n.label) + '</span></div>';
+      }).join("");
+      map.innerHTML = edges + nodeHtml;
+    }
+    bind(root, "[data-action=\"plan\"]", "click", function () {
+      var btn = root.querySelector("[data-action=\"plan\"]");
+      var out = root.querySelector("[data-slot=\"result\"]");
+      if (!(product && product.id)) return;
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 规划中";
+      fetch(apiBase() + "/api/navigation/plan", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          product_id: product.id,
+          query: root.querySelector("[data-field=\"query\"]").value,
+          start: root.querySelector("[data-field=\"start\"]").value || null,
+          end: root.querySelector("[data-field=\"end\"]").value || null,
+          preference: root.querySelector("[data-field=\"preference\"]").value
+        })
+      }).then(function (res) {
+        return res.json().then(function (body) {
+          if (!res.ok) throw new Error((body && body.detail) || "规划失败");
+          return body;
+        });
+      }).then(function (body) {
+        var data = body.data || {};
+        renderMap(data);
+        out.className = "rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-700";
+        out.innerHTML = '<p class="font-medium text-slate-900">' + escapeHtml(data.start_node.label) + " → " + escapeHtml(data.end_node.label) + '</p>' +
+          '<p class="mt-1 text-xs text-slate-500">距离 ' + escapeHtml(String(data.total_distance)) + 'm · 偏好 ' + escapeHtml(data.preference) + ' · 意图解析 ' + escapeHtml(data.model_used) + '</p>' +
+          '<ol class="mt-3 list-decimal space-y-1 pl-5 text-xs">' + (data.path || []).map(function (s) { return '<li>' + escapeHtml(s.instruction) + '</li>'; }).join("") + '</ol>';
+        root.querySelector("[data-slot=\"trace\"]").textContent = (data.tool_trace || []).join("\\n");
+      }).catch(function (ex) {
+        out.className = "rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700";
+        out.textContent = ex.message || "规划失败";
+      }).finally(function () {
+        btn.disabled = false;
+        btn.textContent = "规划路线";
+      });
+    });
+  }
+
+  function demoObjectDetect(root, product) {
+    root.innerHTML = shell("目标检测事件工作台", (
+      '<div class="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">' +
+      '<section class="space-y-3">' +
+      '<div class="grid gap-3 sm:grid-cols-3">' +
+      '<select data-field="scene" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"><option value="warehouse">仓储月台</option><option value="campus">园区入口</option><option value="parking">地下停车区</option></select>' +
+      '<select data-field="mode" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"><option value="counting">计数</option><option value="safety">安全</option><option value="tracking">跟踪</option></select>' +
+      '<label class="text-xs text-slate-600">阈值 <span data-slot="threshold-label">0.55</span><input data-field="threshold" type="range" min="0.1" max="0.95" step="0.05" value="0.55" class="mt-1 w-full accent-orange-500" /></label>' +
+      '</div>' +
+      '<button type="button" data-action="run" class="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-orange-600 disabled:bg-orange-300">运行检测</button>' +
+      '<div data-slot="frame" class="relative aspect-video overflow-hidden rounded-xl border border-slate-200 bg-gradient-to-br from-slate-800 via-slate-600 to-slate-300"></div>' +
+      '</section>' +
+      '<section class="space-y-3">' +
+      '<div data-slot="summary" class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">选择场景后运行检测。</div>' +
+      '<div data-slot="timeline" class="rounded-xl border border-slate-200 bg-white p-4 text-xs text-slate-600"></div>' +
+      '</section></div>'
+    ));
+    function renderDetections(data) {
+      var boxes = (data.detections || []).map(function (d) {
+        var color = d.status === "risk" ? "border-red-500 bg-red-500/10" : d.status === "moving" ? "border-sky-400 bg-sky-400/10" : "border-orange-500 bg-orange-500/10";
+        return '<div class="absolute rounded border-2 ' + color + '" style="left:' + d.x + '%;top:' + d.y + '%;width:' + d.w + '%;height:' + d.h + '%"><span class="absolute -top-5 left-0 rounded bg-slate-900 px-1.5 py-0.5 text-[10px] text-white">' + escapeHtml(d.label) + " " + escapeHtml(String(d.score)) + '</span></div>';
+      }).join("");
+      var heat = (data.heatmap || []).map(function (p) {
+        return '<span class="absolute h-8 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full bg-orange-400/30 blur-sm" style="left:' + p.x + '%;top:' + p.y + '%"></span>';
+      }).join("");
+      root.querySelector("[data-slot=\"frame\"]").innerHTML = heat + boxes + '<span class="absolute left-3 top-3 rounded bg-black/50 px-2 py-1 text-xs text-white">' + escapeHtml(data.frame_id || "") + '</span>';
+      var countHtml = Object.keys(data.counts || {}).map(function (k) {
+        return '<span class="rounded-lg bg-slate-100 px-2 py-1 text-xs">' + escapeHtml(k) + ': ' + escapeHtml(String(data.counts[k])) + '</span>';
+      }).join(" ");
+      root.querySelector("[data-slot=\"summary\"]").innerHTML =
+        '<div class="flex flex-wrap items-center justify-between gap-2"><p class="font-medium text-slate-900">' + escapeHtml(data.scene || "") + '</p><span class="rounded-lg bg-orange-50 px-2 py-1 text-xs text-orange-700">' + escapeHtml(data.model_version || "") + '</span></div>' +
+        '<p class="mt-2 text-xs text-slate-500">模式 ' + escapeHtml(data.mode || "") + " · 阈值 " + escapeHtml(String(data.threshold)) + " · 推理 " + escapeHtml(String(data.inference_ms)) + 'ms</p>' +
+        '<div class="mt-3 flex flex-wrap gap-2">' + countHtml + '</div>' +
+        '<ul class="mt-3 list-disc space-y-1 pl-5 text-xs text-slate-600">' + (data.alerts || []).map(function (x) { return '<li>' + escapeHtml(x) + '</li>'; }).join("") + '</ul>';
+      root.querySelector("[data-slot=\"timeline\"]").innerHTML =
+        '<p class="font-semibold text-slate-500">事件时间线</p>' +
+        '<ol class="mt-2 list-decimal space-y-1 pl-5">' + (data.timeline || []).map(function (x) { return '<li>' + escapeHtml(x) + '</li>'; }).join("") + '</ol>' +
+        '<p class="mt-3 text-[11px] text-slate-400">' + escapeHtml(data.disclaimer || "") + '</p>';
+    }
+    bind(root, "[data-field=\"threshold\"]", "input", function () {
+      root.querySelector("[data-slot=\"threshold-label\"]").textContent = root.querySelector("[data-field=\"threshold\"]").value;
+    });
     bind(root, "[data-action=\"run\"]", "click", function () {
-      root.querySelector("[data-box=\"1\"]").classList.remove("hidden");
-      root.querySelector("[data-box=\"2\"]").classList.remove("hidden");
-      root.querySelector("[data-slot=\"cnt\"]").textContent = "计数：人员 1 · 托盘 1 · 推理耗时 42ms（模拟）";
+      var btn = root.querySelector("[data-action=\"run\"]");
+      if (!(product && product.id)) return;
+      btn.disabled = true;
+      btn.innerHTML = spinHtml() + " 检测中";
+      fetch(apiBase() + "/api/object-detection/analyze", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          product_id: product.id,
+          scene: root.querySelector("[data-field=\"scene\"]").value,
+          mode: root.querySelector("[data-field=\"mode\"]").value,
+          threshold: Number(root.querySelector("[data-field=\"threshold\"]").value)
+        })
+      }).then(function (res) {
+        return res.json().then(function (body) {
+          if (!res.ok) throw new Error((body && body.detail) || "检测失败");
+          return body;
+        });
+      }).then(function (body) {
+        renderDetections(body.data || {});
+      }).catch(function (ex) {
+        root.querySelector("[data-slot=\"summary\"]").innerHTML = '<p class="text-red-700">' + escapeHtml(ex.message || "检测失败") + '</p>';
+      }).finally(function () {
+        btn.disabled = false;
+        btn.textContent = "运行检测";
+      });
     });
   }
 
